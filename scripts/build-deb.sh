@@ -23,7 +23,7 @@ cp -a main.js preload.js core.js autotype.js uinput_type.py icon.png package.jso
 
 # 3. Launcher, desktop entry, icons, udev rule, docs
 mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/applications" "$STAGE/usr/lib/udev/rules.d" "$STAGE/usr/share/doc/kyuch" "$STAGE/DEBIAN"
-printf '#!/bin/sh\nexec /opt/Kyuch/kyuch --ozone-platform-hint=auto "$@"\n' > "$STAGE/usr/bin/kyuch"
+printf '#!/bin/sh\nexec /opt/Kyuch/kyuch "$@"\n' > "$STAGE/usr/bin/kyuch"
 chmod 755 "$STAGE/usr/bin/kyuch"
 cat > "$STAGE/usr/share/applications/kyuch.desktop" <<DESK
 [Desktop Entry]
