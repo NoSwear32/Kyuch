@@ -6,7 +6,7 @@ const path = require('node:path');
 const { Vault } = require('../core');
 const { parse, keyEvents, LAYOUTS } = require('../autotype');
 
-const tmp = path.join(process.env.TMPDIR || os.tmpdir(), `keeper-${process.pid}.kdbx`);
+const tmp = path.join(process.env.TMPDIR || os.tmpdir(), `kyuch-${process.pid}.kdbx`);
 test.after(() => fs.rmSync(tmp, { force: true }));
 
 test('create, nest, save, reload, wrong password', async () => {
@@ -84,4 +84,33 @@ test('Argon2 adapter matches an independent implementation (node:crypto/OpenSSL)
     const ref = crypto.argon2Sync(name, { message: pw, nonce: salt, parallelism: 2, tagLength: 32, memory: 1024, passes: 2 });
     assert.equal(ours.toString('hex'), ref.toString('hex'), name);
   }
+});
+
+test('password generator: length, classes, look-alikes, entropy', () => {
+  const Gen = require('../renderer/gen.js');
+  const all = { length: 24, lower: true, upper: true, digits: true, symbols: true, noAmbiguous: true };
+  for (let i = 0; i < 200; i++) {
+    const p = Gen.generate(all);
+    assert.equal(p.length, 24);
+    assert.match(p, /[a-z]/); assert.match(p, /[A-Z]/); assert.match(p, /[2-9]/); assert.match(p, /[!@#$%^&*\-_=+?]/);
+    assert.doesNotMatch(p, /[0O1lI]/);
+  }
+  assert.match(Gen.generate({ length: 40, digits: true }), /^[0-9]{40}$/);
+  assert.match(Gen.generate({ length: 10, symbols: true, symbolSet: 'ab' }), /^[ab]{10}$/);
+  assert.throws(() => Gen.generate({ length: 10 }));                       // nothing selected
+  assert.throws(() => Gen.generate({ length: 2, lower: true, upper: true, digits: true }));
+  assert.equal(Gen.entropy({ length: 10, digits: true }), 33);            // 10 * log2(10)
+  const counts = {}; for (let i = 0; i < 6000; i++) { const c = Gen.generate({ length: 1, digits: true }); counts[c] = (counts[c] || 0) + 1; }
+  assert.ok(Object.values(counts).every((n) => n > 450 && n < 750), 'roughly uniform: ' + JSON.stringify(counts));
+});
+
+test('XML-hostile characters survive a save/load round trip', async () => {
+  const nasty = `<a href="x">&amp; ]]> <!-- -->' äöü € 🔑</a>`;
+  const v = await Vault.create(tmp, 'master pw');
+  const id = v.addEntry(v.root.uuid.id, { title: nasty, username: nasty, password: nasty, url: nasty, notes: nasty + '\nline2' });
+  await v.save();
+  const r = await Vault.open(tmp, 'master pw');
+  const e = r.getEntry(id);
+  for (const k of ['title', 'username', 'password', 'url']) assert.equal(e[k], nasty, k);
+  assert.equal(e.notes, nasty + '\nline2');
 });

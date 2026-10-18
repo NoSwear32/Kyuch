@@ -21,7 +21,7 @@ const rawSetting = (g, key) => {
   if (key === 'autoType') return g.enableAutoType ?? null;
   if (key === 'searching') return g.enableSearching ?? null;
   if (key === 'autoTypeSeq') return g.defaultAutoTypeSeq || null;
-  const v = g.customData?.get('keeper.' + key)?.value;
+  const v = (g.customData?.get('kyuch.' + key) ?? g.customData?.get('keeper.' + key))?.value; // keeper.* = pre-rename databases
   return v === undefined || v === '' ? null : Number(v);
 };
 
@@ -43,8 +43,9 @@ function writeSettings(g, s) {
   for (const k of NUM_KEYS) {
     if (!(k in s)) continue;
     g.customData ??= new Map();
-    if (s[k] === null || s[k] === '' || s[k] === undefined) g.customData.delete('keeper.' + k);
-    else g.customData.set('keeper.' + k, { value: String(Math.max(0, Math.round(Number(s[k])))) });
+    g.customData.delete('keeper.' + k);
+    if (s[k] === null || s[k] === '' || s[k] === undefined) g.customData.delete('kyuch.' + k);
+    else g.customData.set('kyuch.' + k, { value: String(Math.max(0, Math.round(Number(s[k])))) });
   }
 }
 
@@ -62,7 +63,7 @@ const str = (v) => (v instanceof ProtectedValue ? v.getText() : v || '');
 class Vault {
   constructor(db, path) { this.db = db; this.path = path; this.dirty = false; }
 
-  static async create(path, password, name = 'Keeper') {
+  static async create(path, password, name = 'Kyuch') {
     const db = kdbxweb.Kdbx.create(new kdbxweb.Credentials(ProtectedValue.fromString(password)), name);
     db.upgrade(); // KDBX4 + Argon2 + custom data support
     hardenKdf(db);

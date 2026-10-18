@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Keeper</title>
+<title>Kyuch</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <main id="lock" hidden>
   <div class="card">
-    <h1>🔐 Keeper</h1>
+    <img class="mark" src="logo-mark.svg" alt=""><img class="word" src="logo-text.svg" alt="Kyuch">
     <div id="recent"></div>
     <form id="unlockForm" hidden>
       <div class="muted" id="unlockPath"></div>
@@ -28,10 +28,12 @@
 
 <div id="app" hidden>
   <header>
+    <img class="brand" src="logo-mark.svg" alt="Kyuch">
     <button id="btnEntry" title="New entry">＋ Entry</button>
     <button id="btnFolder" title="New folder in selected folder">＋ Folder</button>
     <button id="btnSave" title="Save (Ctrl+S)">💾 Save</button>
     <button id="btnLock" title="Lock">🔒 Lock</button>
+    <button id="btnGen" title="Password generator">🎲 Generator</button>
     <button id="btnSettings" title="Database &amp; app settings">⚙ Settings</button>
     <input id="search" type="search" placeholder="Search (Ctrl+F)">
   </header>
@@ -52,8 +54,7 @@
       <span class="row">
         <input id="ePass" type="password" autocomplete="off">
         <button type="button" id="eShow">👁</button>
-        <button type="button" id="eGen" title="Generate a random password">🎲</button>
-        <input id="eGenLen" type="number" min="8" max="128" value="20" title="Generated length">
+        <button type="button" id="eGen" title="Open the password generator">🎲</button>
       </span>
     </label>
     <label>URL <input id="eUrl" placeholder="https://"></label>
@@ -87,6 +88,33 @@
   </form>
 </dialog>
 
+<dialog id="genDlg">
+  <form method="dialog" id="genForm">
+    <h2>Password generator</h2>
+    <input id="gOut" class="mono" readonly aria-label="Generated password">
+    <div class="row"><meter id="gMeter" min="0" max="128" low="50" high="100" optimum="128" value="0"></meter><small id="gInfo" class="muted"></small></div>
+    <label>Length
+      <span class="row"><input type="range" id="gLen" min="8" max="128"><input type="number" id="gLenN" min="8" max="128" class="num"></span>
+    </label>
+    <div class="checks">
+      <label class="check"><input type="checkbox" id="gLower"> a–z</label>
+      <label class="check"><input type="checkbox" id="gUpper"> A–Z</label>
+      <label class="check"><input type="checkbox" id="gDigits"> 0–9</label>
+      <label class="check"><input type="checkbox" id="gSymbols"> Symbols</label>
+    </div>
+    <label>Symbols used <input id="gSyms" class="mono"></label>
+    <label class="check"><input type="checkbox" id="gAmbig"> Exclude look-alikes (0 O 1 l I)</label>
+    <p class="error" id="gErr"></p>
+    <menu>
+      <button type="button" id="gRegen">↻ Regenerate</button>
+      <button type="button" id="gCopy">Copy</button>
+      <button value="cancel" formnovalidate>Close</button>
+      <button value="ok" class="primary" id="gUse">Use password</button>
+    </menu>
+  </form>
+</dialog>
+
+<button id="themeBtn" title="Toggle dark / light mode" aria-label="Toggle dark or light mode">🌓</button>
 <dialog id="iconDlg"><div id="iconGrid"></div><menu><button value="cancel">Close</button></menu></dialog>
 
 <dialog id="settingsDlg">
@@ -95,6 +123,7 @@
     <div class="muted" id="dbInfo"></div>
     <label>Auto-lock after idle minutes (0 = never) <input id="aLock" type="number" min="0"></label>
     <label>Auto-type start delay (seconds after the window hides) <input id="aDelay" type="number" min="0"></label>
+    <label>Theme <select id="aTheme"><option value="system">Follow system</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
     <label>Change master password <input id="aNewPw" type="password" autocomplete="off" placeholder="New master password (leave empty to keep)"></label>
     <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Apply</button></menu>
   </form>
@@ -113,6 +142,7 @@
 
 <div id="toast" hidden></div>
 <script src="icons.js"></script>
+<script src="gen.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

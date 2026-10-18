@@ -1,5 +1,7 @@
 :root { --bg:#1b1d22; --panel:#23262d; --line:#343843; --text:#e6e8ec; --muted:#8b92a0; --accent:#5b8def; --danger:#e5636b; --sel:#2f3b57; color-scheme: dark; }
-@media (prefers-color-scheme: light) { :root { --bg:#f4f5f7; --panel:#fff; --line:#d9dce3; --text:#1d2127; --muted:#667085; --accent:#2f6fe4; --danger:#c8353f; --sel:#dbe7ff; color-scheme: light; } }
+/* light palette: chosen explicitly, or by the system when the theme is "system" (no data-theme attribute) */
+:root[data-theme="light"] { --bg:#f4f5f7; --panel:#fff; --line:#d9dce3; --text:#1d2127; --muted:#667085; --accent:#2f6fe4; --danger:#c8353f; --sel:#dbe7ff; color-scheme: light; }
+@media (prefers-color-scheme: light) { :root:not([data-theme]) { --bg:#f4f5f7; --panel:#fff; --line:#d9dce3; --text:#1d2127; --muted:#667085; --accent:#2f6fe4; --danger:#c8353f; --sel:#dbe7ff; color-scheme: light; } }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
@@ -57,3 +59,12 @@ menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 4
 #toast { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--accent); padding: 8px 16px; border-radius: 8px; }
 #toast.bad { border-color: var(--danger); }
 .bar { padding: 8px 10px; } .grow { flex: 1; }
+
+.card .mark { width: 96px; height: 96px; justify-self: center; } .card .word { height: 42px; justify-self: center; }
+.brand { width: 28px; height: 28px; align-self: center; }
+.mono { font-family: ui-monospace, "DejaVu Sans Mono", monospace; }
+#gOut { font-size: 17px; letter-spacing: .5px; padding: 10px; word-break: break-all; }
+#gMeter { flex: 1; height: 14px; } .num { width: 72px; flex: none; } .checks { display: flex; gap: 14px; flex-wrap: wrap; }
+.checks label.check { color: var(--text); font-size: 14px; }
+#themeBtn { position: fixed; right: 10px; bottom: 30px; padding: 2px 8px; border-radius: 20px; opacity: .75; z-index: 5; } #themeBtn:hover { opacity: 1; }
+dialog form + form { margin-top: 8px; }

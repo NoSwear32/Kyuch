@@ -1,6 +1,6 @@
 // UI only. Passwords stay in the main process; this file only ever sees them when the user opens an entry.
 const $ = (id) => document.getElementById(id);
-const call = (ch, arg) => keeper.call(ch, arg);
+const call = (ch, arg) => kyuch.call(ch, arg);
 const h = (tag, a = {}, ...kids) => {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(a)) {
@@ -30,14 +30,19 @@ function show(dlg) {
   return new Promise((r) => dlg.addEventListener('close', () => r(dlg.returnValue === 'ok'), { once: true }));
 }
 
+// ---------- theme: explicit data-theme wins, "system" follows the OS ----------
+const isDark = () => document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+function applyTheme(theme) { if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; }
+
 // ---------- state ----------
 function setState(s) {
   S = s;
+  if (s) applyTheme(s.cfg.theme);
   $('lock').hidden = !!s; $('app').hidden = !s;
   if (!s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
-    for (const id of ['ePass', 'aNewPw', 'nPw', 'nPw2']) $(id).value = '';
+    for (const id of ['ePass', 'aNewPw', 'nPw', 'nPw2', 'gOut']) $(id).value = '';
     query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return;
   }
   groups = new Map(); entries = new Map();
@@ -154,14 +159,50 @@ function pickIcon(current) {
 const iconButton = (btn, get, set) => { btn.textContent = ICONS[get()]; btn.onclick = async () => { set(await pickIcon(get())); btn.textContent = ICONS[get()]; }; };
 
 // ---------- entry dialog ----------
-const CLASSES = ['abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789', '!@#$%^&*-_=+?'];
-function rnd(n) { const a = new Uint32Array(1), lim = 2 ** 32 - (2 ** 32 % n); do crypto.getRandomValues(a); while (a[0] >= lim); return a[0] % n; }
-function generate(len) {
-  const all = CLASSES.join(''), out = CLASSES.map((c) => c[rnd(c.length)]);
-  while (out.length < len) out.push(all[rnd(all.length)]);
-  for (let i = out.length - 1; i > 0; i--) { const j = rnd(i + 1); [out[i], out[j]] = [out[j], out[i]]; }
-  return out.join('');
+// ---------- password generator dialog ----------
+const GEN_KEY = 'kyuch.gen';
+function genPrefs() {
+  const d = { length: 20, lower: true, upper: true, digits: true, symbols: true, symbolSet: Gen.DEFAULT_SYMBOLS, noAmbiguous: false };
+  try { return { ...d, ...JSON.parse(localStorage.getItem(GEN_KEY) || '{}') }; } catch { return d; }
 }
+let genCtl = null;
+function wireGenerator() {
+  const el = (id) => $(id);
+  const read = () => ({ length: +el('gLenN').value || 20, lower: el('gLower').checked, upper: el('gUpper').checked, digits: el('gDigits').checked,
+    symbols: el('gSymbols').checked, symbolSet: el('gSyms').value, noAmbiguous: el('gAmbig').checked });
+  const regen = () => {
+    const o = read();
+    try {
+      el('gOut').value = Gen.generate(o); el('gErr').textContent = '';
+      try { localStorage.setItem(GEN_KEY, JSON.stringify(o)); } catch { /* prefs are optional */ }
+    } catch (e) { el('gOut').value = ''; el('gErr').textContent = e.message; }
+    const bits = el('gOut').value ? Gen.entropy(o) : 0;
+    el('gMeter').value = bits; el('gInfo').textContent = el('gOut').value ? `${Gen.label(bits)} · ${bits} bits` : '';
+  };
+  const sync = (from, to) => el(from).addEventListener('input', () => { el(to).value = el(from).value; regen(); });
+  sync('gLen', 'gLenN'); sync('gLenN', 'gLen');
+  for (const id of ['gLower', 'gUpper', 'gDigits', 'gSymbols', 'gSyms', 'gAmbig']) el(id).addEventListener('input', regen);
+  el('gRegen').onclick = regen;
+  el('gCopy').onclick = () => act(async () => { if (el('gOut').value) { await call('clip:copy', { text: el('gOut').value }); toast('Password copied'); } });
+  return (useButton) => {
+    const p = genPrefs();
+    el('gLen').value = el('gLenN').value = p.length;
+    el('gLower').checked = p.lower; el('gUpper').checked = p.upper; el('gDigits').checked = p.digits; el('gSymbols').checked = p.symbols;
+    el('gSyms').value = p.symbolSet; el('gAmbig').checked = p.noAmbiguous;
+    el('gUse').hidden = !useButton;
+    regen();
+  };
+}
+// Resolves with the password if "Use password" was pressed, otherwise null. The password is wiped from the page afterwards.
+async function openGenerator(useButton) {
+  genCtl ??= wireGenerator();
+  genCtl(useButton);
+  const ok = await show($('genDlg'));
+  const pw = ok ? $('gOut').value : null;
+  $('gOut').value = '';
+  return pw;
+}
+$('btnGen').onclick = () => openGenerator(false);
 
 async function editEntry(id) {
   const base = id ? await act(() => call('entry:get', { id })) : { title: '', username: '', password: '', url: '', notes: '', icon: 0, tags: [], autoType: true, autoTypeSeq: '' };
@@ -176,7 +217,7 @@ async function editEntry(id) {
   const inh = g.effective.autoTypeSeq;
   $('eSeq').placeholder = `Inherit: ${inh.value}${inh.from ? ` (from ${inh.from})` : ''}`;
   $('eShow').onclick = () => ($('ePass').type = $('ePass').type === 'password' ? 'text' : 'password');
-  $('eGen').onclick = () => { $('ePass').value = generate(Math.min(128, Math.max(8, +$('eGenLen').value || 20))); $('ePass').type = 'text'; };
+  $('eGen').onclick = async () => { const pw = await openGenerator(true); if (pw) { $('ePass').value = pw; $('ePass').type = 'text'; } };
   if (!(await show($('entryDlg')))) return;
   const p = {
     title: $('eTitle').value, username: $('eUser').value, password: $('ePass').value, url: $('eUrl').value.trim(), notes: $('eNotes').value, icon,
@@ -218,11 +259,12 @@ function editFolder(id, parentId) {
 
 // ---------- settings dialog ----------
 async function appSettings() {
-  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.typeStartDelay; $('aNewPw').value = '';
+  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.typeStartDelay; $('aTheme').value = S.cfg.theme || 'system'; $('aNewPw').value = '';
   $('dbInfo').textContent = `${S.name} — ${S.path} — KDBX${S.legacy ? 3 : 4}`;
   if (!(await show($('settingsDlg')))) return;
   await act(async () => {
-    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, typeStartDelay: $('aDelay').value });
+    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, typeStartDelay: $('aDelay').value, theme: $('aTheme').value });
+    applyTheme(S.cfg.theme);
     armIdle();
     if ($('aNewPw').value) { setState(await call('db:changePassword', { password: $('aNewPw').value })); toast('Master password changed'); }
   });
@@ -262,6 +304,11 @@ $('btnNewDb').onclick = () => act(async () => {
 // ---------- toolbar, shortcuts, auto-lock ----------
 const lock = (auto) => act(async () => { if (await call('db:lock', { auto: auto === true })) setState(null); else armIdle(); });
 $('btnLock').onclick = () => lock();
+$('themeBtn').onclick = () => act(async () => {
+  const next = await call('cfg:set', { ...(await call('cfg:get')), theme: isDark() ? 'light' : 'dark' });
+  applyTheme(next.theme);
+  if (S) S.cfg = next;
+});
 $('btnSave').onclick = () => update('db:save');
 $('btnSettings').onclick = appSettings;
 $('btnEntry').onclick = () => editEntry(null);
@@ -287,4 +334,4 @@ function armIdle() {
 }
 for (const ev of ['mousemove', 'keydown', 'mousedown']) document.addEventListener(ev, () => S && armIdle(), { passive: true });
 
-act(async () => { const s = await call('state'); setState(s); if (s) armIdle(); });
+act(async () => { applyTheme((await call('cfg:get')).theme); const s = await call('state'); setState(s); if (s) armIdle(); });

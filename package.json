@@ -1,11 +1,12 @@
 {
-  "name": "keeper",
-  "version": "0.1.0",
-  "description": "",
+  "name": "kyuch",
+  "version": "0.2.0",
+  "description": "Kyuch - a KeePass-compatible password manager",
   "main": "main.js",
   "scripts": {
     "test": "node --test test/core.test.js",
-    "start": "electron ."
+    "start": "electron .",
+    "deb": "bash scripts/build-deb.sh"
   },
   "keywords": [],
   "author": "",
@@ -18,5 +19,9 @@
   },
   "devDependencies": {
     "electron": "44.7.0"
+  },
+  "productName": "Kyuch",
+  "overrides": {
+    "@xmldom/xmldom": "0.8.15"
   }
 }

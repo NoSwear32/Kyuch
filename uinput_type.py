@@ -15,7 +15,7 @@ fd = os.open('/dev/uinput', os.O_WRONLY | os.O_NONBLOCK)
 fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
 for k in range(1, 249):
     fcntl.ioctl(fd, UI_SET_KEYBIT, k)
-fcntl.ioctl(fd, UI_DEV_SETUP, struct.pack('<HHHH80sI', 3, 0x1234, 0x5678, 1, b'keeper-autotype', 0))
+fcntl.ioctl(fd, UI_DEV_SETUP, struct.pack('<HHHH80sI', 3, 0x1234, 0x5678, 1, b'kyuch-autotype', 0))
 fcntl.ioctl(fd, UI_DEV_CREATE)
 try:
     time.sleep(0.5)  # let the compositor notice the new keyboard, or the first keys are lost

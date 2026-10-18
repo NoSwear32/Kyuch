@@ -1,9 +1,9 @@
-// UI smoke test. Needs playwright from ../umbra/app. Run: mkdir -p /tmp/kt && cd /tmp/kt && node /home/noswear/Documents/Claude/keeper/test/e2e.mjs
+// UI smoke test. Needs playwright from ../umbra/app. Run: mkdir -p /tmp/kt && cd /tmp/kt && node /home/noswear/Documents/Claude/kyuch/test/e2e.mjs
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 const require = createRequire('/home/noswear/Documents/Claude/umbra/app/package.json');
 const { _electron } = require('playwright');
-const K = '/home/noswear/Documents/Claude/keeper', T = '/tmp/kt';
+const K = '/home/noswear/Documents/Claude/kyuch', T = '/tmp/kt';
 fs.rmSync(T + '/ud', { recursive: true, force: true }); fs.rmSync(T + '/e2e.kdbx', { force: true });
 const app = await _electron.launch({ executablePath: K + '/node_modules/electron/dist/electron', args: ['.', '--user-data-dir=' + T + '/ud'], cwd: K, env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1' } });
 await app.evaluate(({ dialog, BrowserWindow }, f) => {
@@ -59,7 +59,7 @@ await shot('unlocked');
 ok((await page.textContent('#tree')).includes('Deep'), 'data persisted across lock/unlock');
 ok(errs.length === 0, 'no renderer errors ' + errs.join('|'));
 // auto-lock with an open dialog and unsaved edits: must save, lock, and leave no dialog/password on screen
-await page.evaluate(async () => { await keeper.call('group:add', { parentId: S.root.id, name: 'Dirty' }); });
+await page.evaluate(async () => { await kyuch.call('group:add', { parentId: S.root.id, name: 'Dirty' }); });
 await page.click('#btnEntry'); await page.fill('#eTitle', 'Unsaved'); await page.fill('#ePass', 'plaintext-pw');
 await page.evaluate(() => lock(true));
 await page.waitForSelector('#lock:not([hidden])');
@@ -67,8 +67,32 @@ ok(await page.evaluate(() => document.querySelectorAll('dialog[open]').length ==
 await page.click('#recent button'); await page.fill('#unlockPw', 'hunter2'); await page.press('#unlockPw', 'Enter');
 await page.waitForSelector('#app:not([hidden])');
 ok((await page.textContent('#tree')).includes('Dirty'), 'auto-lock saved unsaved edits before locking');
+// branding, generator, theme
+ok(await page.evaluate(() => document.querySelector('.brand').naturalWidth > 0), 'logo mark loads in the toolbar');
+await page.click('#btnGen');
+ok((await page.inputValue('#gOut')).length === 20, 'generator opens with a 20 char password');
+await page.fill('#gLenN', '32'); await page.dispatchEvent('#gLenN', 'input'); await page.uncheck('#gSymbols');
+const gp = await page.inputValue('#gOut');
+ok(gp.length === 32 && /^[A-Za-z0-9]+$/.test(gp), 'length + symbol toggle respected: ' + gp.length);
+await page.click('#gCopy'); await page.waitForTimeout(150);
+ok(await app.evaluate(({ clipboard }) => clipboard.readText()) === gp, 'generator Copy puts the password on the clipboard');
+await page.click('#genForm button[value=cancel]');
+await page.click('#btnEntry'); await page.click('#eGen'); const gp2 = await page.inputValue('#gOut'); await page.click('#gUse');
+ok((await page.inputValue('#ePass')) === gp2 && gp2.length === 32, 'Use password fills the entry form');
+ok((await page.inputValue('#gOut')) === '', 'generator output wiped after closing');
+await page.click('#entryForm button[value=cancel]');
+const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+const setTheme = (theme) => page.evaluate((th) => kyuch.call('cfg:set', { autoLockMin: 5, typeStartDelay: 2, theme: th }).then((c) => { applyTheme(c.theme); }), theme);
+await setTheme('light'); const lightBg = await bg();
+await page.click('#themeBtn'); await page.waitForTimeout(200);
+const darkBg = await bg(); await shot('dark');
+ok(lightBg !== darkBg && darkBg === 'rgb(27, 29, 34)', 'theme button switches light -> dark: ' + lightBg + ' -> ' + darkBg);
+await page.click('#themeBtn'); await page.waitForTimeout(200);
+ok((await bg()) === lightBg, 'theme button switches back to light'); await shot('light');
+await setTheme('dark'); ok((await bg()) === darkBg, 'settings theme "dark" applies');
+await setTheme('system');
 // auto-type through the real IPC path into another window (needs /dev/uinput access, see autotype.js)
-await page.evaluate(() => keeper.call('cfg:set', { autoLockMin: 5, typeStartDelay: 1 }));
+await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, typeStartDelay: 1 }));
 await page.click('.node:has-text("Deep")'); await page.click('tbody tr');
 const id = await page.evaluate(() => selEntry);
 await app.evaluate(async ({ BrowserWindow }) => {
@@ -78,13 +102,13 @@ await app.evaluate(async ({ BrowserWindow }) => {
 });
 const read = () => app.evaluate(async () => globalThis.__target.webContents.executeJavaScript('[a.value,b.value]'));
 await page.waitForTimeout(800);
-await page.evaluate((id) => keeper.call('entry:autotype', { id }), id);       // inherited from Work: {PASSWORD}{ENTER}
+await page.evaluate((id) => kyuch.call('entry:autotype', { id }), id);       // inherited from Work: {PASSWORD}{ENTER}
 await page.waitForTimeout(500);
 ok(JSON.stringify(await read()) === JSON.stringify(['s3cret!', '']), 'auto-type uses the sequence inherited from the parent folder: ' + JSON.stringify(await read()));
 await app.evaluate(async () => { await globalThis.__target.webContents.executeJavaScript('a.value="";b.value="";a.focus()'); globalThis.__target.focus(); });
-await page.evaluate((id) => keeper.call('entry:update', { id, autoTypeSeq: '{USERNAME}{TAB}{PASSWORD}' }), id);
+await page.evaluate((id) => kyuch.call('entry:update', { id, autoTypeSeq: '{USERNAME}{TAB}{PASSWORD}' }), id);
 await page.waitForTimeout(500);
-await page.evaluate((id) => keeper.call('entry:autotype', { id }), id);       // entry override with a Tab between fields
+await page.evaluate((id) => kyuch.call('entry:autotype', { id }), id);       // entry override with a Tab between fields
 await page.waitForTimeout(500);
 ok(JSON.stringify(await read()) === JSON.stringify(['octo', 's3cret!']), 'entry sequence override + Tab moves between fields: ' + JSON.stringify(await read()));
 await app.close();

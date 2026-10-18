@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Vault, DEFAULTS } = require('./core');
@@ -8,8 +8,9 @@ let win, vault = null, clipTimer = null, clipText = null;
 
 // ---- app-level config (not in the database) ----
 const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
-let cfg = { recent: [], autoLockMin: 5, typeStartDelay: 2 };
+let cfg = { recent: [], autoLockMin: 5, typeStartDelay: 2, theme: 'system' };
 try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; } catch { /* first run */ }
+const applyTheme = () => { nativeTheme.themeSource = ['system', 'light', 'dark'].includes(cfg.theme) ? cfg.theme : 'system'; };
 const saveCfg = () => fs.writeFileSync(cfgFile(), JSON.stringify(cfg));
 const remember = (p) => { cfg.recent = [p, ...cfg.recent.filter((r) => r !== p)].slice(0, 8); saveCfg(); };
 
@@ -64,7 +65,11 @@ async function adopt(v) {
 // Every handler returns {ok,data} / {ok:false,error} so the renderer can show messages.
 const handlers = {
   'cfg:get': () => cfg,
-  'cfg:set': (c) => { cfg = { ...cfg, autoLockMin: Math.max(0, +c.autoLockMin || 0), typeStartDelay: Math.max(0, +c.typeStartDelay || 0) }; saveCfg(); return cfg; },
+  'cfg:set': (c) => {
+    cfg = { ...cfg, autoLockMin: Math.max(0, +c.autoLockMin || 0), typeStartDelay: Math.max(0, +c.typeStartDelay || 0), theme: c.theme ?? cfg.theme };
+    applyTheme(); saveCfg(); return cfg;
+  },
+  'clip:copy': ({ text }) => copy(String(text), DEFAULTS.clipboardClear), // generator output; auto-clears like entry passwords
   'state': () => state(),
 
   'pick:new': async () => {
@@ -148,8 +153,9 @@ for (const [ch, fn] of Object.entries(handlers)) {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+  applyTheme();
   win = new BrowserWindow({
-    width: 1100, height: 700, minWidth: 760, minHeight: 480, title: 'Keeper', backgroundColor: '#1b1d22',
+    width: 1100, height: 700, minWidth: 760, minHeight: 480, title: 'Kyuch', icon: path.join(__dirname, 'icon.png'), backgroundColor: '#1b1d22',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
