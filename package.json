@@ -1,0 +1,22 @@
+{
+  "name": "keeper",
+  "version": "0.1.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "test": "node --test test/core.test.js",
+    "start": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "private": "true",
+  "dependencies": {
+    "hash-wasm": "^4.12.0",
+    "kdbxweb": "^2.1.1"
+  },
+  "devDependencies": {
+    "electron": "44.7.0"
+  }
+}

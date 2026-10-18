@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keeper</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<main id="lock" hidden>
+  <div class="card">
+    <h1>🔐 Keeper</h1>
+    <div id="recent"></div>
+    <form id="unlockForm" hidden>
+      <div class="muted" id="unlockPath"></div>
+      <input id="unlockPw" type="password" placeholder="Master password" autocomplete="off" required>
+      <button class="primary">Unlock</button>
+    </form>
+    <div class="row">
+      <button id="btnNewDb">New database…</button>
+      <button id="btnOpenDb">Open file…</button>
+    </div>
+    <p class="error" id="lockErr"></p>
+  </div>
+</main>
+
+<div id="app" hidden>
+  <header>
+    <button id="btnEntry" title="New entry">＋ Entry</button>
+    <button id="btnFolder" title="New folder in selected folder">＋ Folder</button>
+    <button id="btnSave" title="Save (Ctrl+S)">💾 Save</button>
+    <button id="btnLock" title="Lock">🔒 Lock</button>
+    <button id="btnSettings" title="Database &amp; app settings">⚙ Settings</button>
+    <input id="search" type="search" placeholder="Search (Ctrl+F)">
+  </header>
+  <div id="panes">
+    <nav id="tree"></nav>
+    <section id="list"></section>
+    <aside id="detail"></aside>
+  </div>
+  <footer id="status"></footer>
+</div>
+
+<dialog id="entryDlg">
+  <form method="dialog" id="entryForm">
+    <h2 id="entryDlgTitle">Entry</h2>
+    <div class="row"><button type="button" id="eIcon" class="iconbtn"></button><input id="eTitle" placeholder="Title" required></div>
+    <label>Username <input id="eUser" autocomplete="off"></label>
+    <label>Password
+      <span class="row">
+        <input id="ePass" type="password" autocomplete="off">
+        <button type="button" id="eShow">👁</button>
+        <button type="button" id="eGen" title="Generate a random password">🎲</button>
+        <input id="eGenLen" type="number" min="8" max="128" value="20" title="Generated length">
+      </span>
+    </label>
+    <label>URL <input id="eUrl" placeholder="https://"></label>
+    <label>Comments <textarea id="eNotes" rows="4"></textarea></label>
+    <label>Tags <input id="eTags" placeholder="comma separated"></label>
+    <fieldset>
+      <legend>Auto-type</legend>
+      <label class="check"><input type="checkbox" id="eAuto"> Enabled for this entry</label>
+      <label>Sequence <input id="eSeq"></label>
+      <small class="muted">Placeholders: {USERNAME} {PASSWORD} {URL} {TITLE} {NOTES} {TAB} {ENTER} {SPACE} {DELAY 500}</small>
+    </fieldset>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></menu>
+  </form>
+</dialog>
+
+<dialog id="folderDlg">
+  <form method="dialog" id="folderForm">
+    <h2 id="folderDlgTitle">Folder</h2>
+    <div class="row"><button type="button" id="fIcon" class="iconbtn"></button><input id="fName" placeholder="Name" required></div>
+    <label>Comments <textarea id="fNotes" rows="2"></textarea></label>
+    <fieldset>
+      <legend>Settings <small class="muted">— empty / "Inherit" uses the parent folder's value</small></legend>
+      <label>Auto-type <select id="sAuto"></select></label>
+      <label>Included in search <select id="sSearch"></select></label>
+      <label>Auto-type sequence <input id="sSeq"></label>
+      <label>Clear clipboard after (seconds, 0 = never) <input id="sClip" type="number" min="0"></label>
+      <label>Keystroke delay (ms) <input id="sDelay" type="number" min="0"></label>
+      <small class="muted" id="sNote"></small>
+    </fieldset>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></menu>
+  </form>
+</dialog>
+
+<dialog id="iconDlg"><div id="iconGrid"></div><menu><button value="cancel">Close</button></menu></dialog>
+
+<dialog id="settingsDlg">
+  <form method="dialog" id="settingsForm">
+    <h2>Settings</h2>
+    <div class="muted" id="dbInfo"></div>
+    <label>Auto-lock after idle minutes (0 = never) <input id="aLock" type="number" min="0"></label>
+    <label>Auto-type start delay (seconds after the window hides) <input id="aDelay" type="number" min="0"></label>
+    <label>Change master password <input id="aNewPw" type="password" autocomplete="off" placeholder="New master password (leave empty to keep)"></label>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Apply</button></menu>
+  </form>
+</dialog>
+
+<dialog id="newDbDlg">
+  <form method="dialog" id="newDbForm">
+    <h2>New database</h2>
+    <div class="muted" id="newDbPath"></div>
+    <label>Master password <input id="nPw" type="password" autocomplete="off" required></label>
+    <label>Repeat master password <input id="nPw2" type="password" autocomplete="off" required></label>
+    <p class="error" id="newDbErr"></p>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Create</button></menu>
+  </form>
+</dialog>
+
+<div id="toast" hidden></div>
+<script src="icons.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
