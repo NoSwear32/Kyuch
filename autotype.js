@@ -1,4 +1,4 @@
-// Auto-type: sequence parser (pure) + Linux/Wayland typer via ydotool.
+// Auto-type: sequence parser (pure) + Linux typer (raw keycodes via /dev/uinput, see uinput_type.py).
 const { execFile, execFileSync } = require('node:child_process');
 
 // "{USERNAME}{TAB}{PASSWORD}{ENTER}" -> [{text}|{key}|{delay}], with entry fields substituted.
@@ -63,19 +63,16 @@ function keyEvents(actions, map) {
   return evs;
 }
 
-const run = (args) => new Promise((res, rej) => execFile('ydotool', args, (e, _o, err) => (e ? rej(new Error(err || e.message)) : res())));
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const helper = require('node:path').join(__dirname, 'uinput_type.py');
+const run = (args) => new Promise((res, rej) => execFile('python3', [helper, ...args], (e, _o, err) => (e ? rej(new Error(err.trim().split('\n').pop() || e.message)) : res())));
 
 // Types the actions into whatever window has focus. Validates everything before typing a single key.
+// One helper call for the whole sequence: it creates a virtual keyboard, types, and removes it.
 async function type(actions, delayMs) {
   if (process.platform !== 'linux') throw new Error('Auto-type is only implemented for Linux so far'); // ponytail: add win32 (SendInput) here
   const map = LAYOUTS[layout()];
-  keyEvents(actions, map); // fail fast on untypeable characters
-  for (const a of actions) {
-    if (a.delay) { await sleep(a.delay); continue; }
-    const evs = keyEvents([a], map);
-    if (evs.length) await run(['key', '-d', String(delayMs), ...evs]);
-  }
+  const tokens = actions.flatMap((a) => (a.delay ? [`sleep:${a.delay}`] : keyEvents([a], map).flatMap((e) => e.split(' '))));
+  await run([String(delayMs), ...tokens]);
 }
 
 module.exports = { parse, keyEvents, type, LAYOUTS, layout };

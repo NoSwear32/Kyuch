@@ -67,4 +67,24 @@ ok(await page.evaluate(() => document.querySelectorAll('dialog[open]').length ==
 await page.click('#recent button'); await page.fill('#unlockPw', 'hunter2'); await page.press('#unlockPw', 'Enter');
 await page.waitForSelector('#app:not([hidden])');
 ok((await page.textContent('#tree')).includes('Dirty'), 'auto-lock saved unsaved edits before locking');
+// auto-type through the real IPC path into another window (needs /dev/uinput access, see autotype.js)
+await page.evaluate(() => keeper.call('cfg:set', { autoLockMin: 5, typeStartDelay: 1 }));
+await page.click('.node:has-text("Deep")'); await page.click('tbody tr');
+const id = await page.evaluate(() => selEntry);
+await app.evaluate(async ({ BrowserWindow }) => {
+  const w = new BrowserWindow({ width: 500, height: 200, x: 50, y: 50 });
+  await w.loadURL('data:text/html,<input id=a autofocus><input id=b>');
+  w.show(); w.focus(); w.webContents.focus(); globalThis.__target = w;
+});
+const read = () => app.evaluate(async () => globalThis.__target.webContents.executeJavaScript('[a.value,b.value]'));
+await page.waitForTimeout(800);
+await page.evaluate((id) => keeper.call('entry:autotype', { id }), id);       // inherited from Work: {PASSWORD}{ENTER}
+await page.waitForTimeout(500);
+ok(JSON.stringify(await read()) === JSON.stringify(['s3cret!', '']), 'auto-type uses the sequence inherited from the parent folder: ' + JSON.stringify(await read()));
+await app.evaluate(async () => { await globalThis.__target.webContents.executeJavaScript('a.value="";b.value="";a.focus()'); globalThis.__target.focus(); });
+await page.evaluate((id) => keeper.call('entry:update', { id, autoTypeSeq: '{USERNAME}{TAB}{PASSWORD}' }), id);
+await page.waitForTimeout(500);
+await page.evaluate((id) => keeper.call('entry:autotype', { id }), id);       // entry override with a Tab between fields
+await page.waitForTimeout(500);
+ok(JSON.stringify(await read()) === JSON.stringify(['octo', 's3cret!']), 'entry sequence override + Tab moves between fields: ' + JSON.stringify(await read()));
 await app.close();
