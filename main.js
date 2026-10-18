@@ -96,7 +96,9 @@ const handlers = {
     remember(vault.path);
     return state();
   },
-  'db:lock': async () => {
+  'db:lock': async ({ auto } = {}) => {
+    // Idle auto-lock must never wait on a modal (the user is away): save atomically, then lock.
+    if (auto && vault?.dirty) { try { await vault.save(); } catch { /* fall back to the prompt below */ } }
     if (!(await canLeave())) return false;
     clearClipboard();
     vault = null;

@@ -34,7 +34,12 @@ function show(dlg) {
 function setState(s) {
   S = s;
   $('lock').hidden = !!s; $('app').hidden = !s;
-  if (!s) { query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return; }
+  if (!s) {
+    // Locking must not leave an open dialog (or a plaintext password field) on screen.
+    document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+    for (const id of ['ePass', 'aNewPw', 'nPw', 'nPw2']) $(id).value = '';
+    query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return;
+  }
   groups = new Map(); entries = new Map();
   const walk = (g, parent) => { groups.set(g.id, { g, parent }); g.entries.forEach((e) => entries.set(e.id, { e, g })); g.groups.forEach((c) => walk(c, g)); };
   walk(s.root, null);
@@ -255,8 +260,8 @@ $('btnNewDb').onclick = () => act(async () => {
 });
 
 // ---------- toolbar, shortcuts, auto-lock ----------
-const lock = () => act(async () => { if (await call('db:lock')) setState(null); else armIdle(); });
-$('btnLock').onclick = lock;
+const lock = (auto) => act(async () => { if (await call('db:lock', { auto: auto === true })) setState(null); else armIdle(); });
+$('btnLock').onclick = () => lock();
 $('btnSave').onclick = () => update('db:save');
 $('btnSettings').onclick = appSettings;
 $('btnEntry').onclick = () => editEntry(null);
@@ -278,7 +283,7 @@ document.addEventListener('keydown', (e) => {
 let idle;
 function armIdle() {
   clearTimeout(idle);
-  if (S && S.cfg.autoLockMin > 0) idle = setTimeout(lock, S.cfg.autoLockMin * 60000);
+  if (S && S.cfg.autoLockMin > 0) idle = setTimeout(() => lock(true), S.cfg.autoLockMin * 60000);
 }
 for (const ev of ['mousemove', 'keydown', 'mousedown']) document.addEventListener(ev, () => S && armIdle(), { passive: true });
 

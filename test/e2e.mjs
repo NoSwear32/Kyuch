@@ -58,4 +58,13 @@ await page.waitForSelector('#app:not([hidden])');
 await shot('unlocked');
 ok((await page.textContent('#tree')).includes('Deep'), 'data persisted across lock/unlock');
 ok(errs.length === 0, 'no renderer errors ' + errs.join('|'));
+// auto-lock with an open dialog and unsaved edits: must save, lock, and leave no dialog/password on screen
+await page.evaluate(async () => { await keeper.call('group:add', { parentId: S.root.id, name: 'Dirty' }); });
+await page.click('#btnEntry'); await page.fill('#eTitle', 'Unsaved'); await page.fill('#ePass', 'plaintext-pw');
+await page.evaluate(() => lock(true));
+await page.waitForSelector('#lock:not([hidden])');
+ok(await page.evaluate(() => document.querySelectorAll('dialog[open]').length === 0 && document.getElementById('ePass').value === ''), 'lock closes dialogs and clears password fields');
+await page.click('#recent button'); await page.fill('#unlockPw', 'hunter2'); await page.press('#unlockPw', 'Enter');
+await page.waitForSelector('#app:not([hidden])');
+ok((await page.textContent('#tree')).includes('Dirty'), 'auto-lock saved unsaved edits before locking');
 await app.close();
