@@ -20,7 +20,7 @@ function createUpdater({ api, current, publicKey, allowLocal = false }) {
 
   async function get(url, { json = false, max = MAX_BYTES } = {}) {
     const res = await fetch(url, { headers: { Accept: json ? 'application/vnd.github+json' : 'application/octet-stream', 'User-Agent': 'Kyuch' }, signal: AbortSignal.timeout(10 * 60 * 1000) });
-    if (res.status === 404) throw new Error('Nothing found there. Is the repository private, or does it have no release yet?');
+    if (res.status === 404) throw new Error('No release has been published yet (or the repository is private).');
     if (!res.ok) throw new Error(`Server answered ${res.status}`);
     if (Number(res.headers.get('content-length')) > max) throw new Error('Download is unexpectedly large');
     const buf = Buffer.from(await res.arrayBuffer());
