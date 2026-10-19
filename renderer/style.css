@@ -1,7 +1,13 @@
-:root { --bg:#1b1d22; --panel:#23262d; --line:#343843; --text:#e6e8ec; --muted:#8b92a0; --accent:#5b8def; --danger:#e5636b; --sel:#2f3b57; --btn:#2b2f38; --hover:#3a4150; color-scheme: dark; }
-/* light palette: chosen explicitly, or by the system when the theme is "system" (no data-theme attribute) */
-:root[data-theme="light"] { --bg:#f4f5f7; --panel:#fff; --line:#d9dce3; --text:#1d2127; --muted:#667085; --accent:#2f6fe4; --danger:#c8353f; --sel:#dbe7ff; --btn:#eceef2; --hover:#dde2ec; color-scheme: light; }
-@media (prefers-color-scheme: light) { :root:not([data-theme]) { --bg:#f4f5f7; --panel:#fff; --line:#d9dce3; --text:#1d2127; --muted:#667085; --accent:#2f6fe4; --danger:#c8353f; --sel:#dbe7ff; --btn:#eceef2; --hover:#dde2ec; color-scheme: light; } }
+/* Themes. Each block defines the same variables. `.theme-card[data-theme]` reuses them so the Settings picker previews every theme in its own colours. */
+:root, .theme-card[data-theme="dark"] { --bg:#1b1d22; --panel:#23262d; --line:#343843; --text:#e6e8ec; --muted:#98a0ae; --accent:#3b6fe3; --on-accent:#ffffff; --danger:#ff7b84; --sel:#2f3b57; --btn:#2b2f38; --hover:#3a4150; --logo:#f85800; color-scheme:dark; }
+:root[data-theme="light"], .theme-card[data-theme="light"] { --bg:#f4f5f7; --panel:#ffffff; --line:#d9dce3; --text:#1d2127; --muted:#596273; --accent:#2f6fe4; --on-accent:#ffffff; --danger:#c3303a; --sel:#dbe7ff; --btn:#eceef2; --hover:#dde2ec; --logo:#f85800; color-scheme:light; }
+/* "System" (no data-theme attribute) follows the OS: light only when the OS asks for it */
+@media (prefers-color-scheme: light) { :root:not([data-theme]) { --bg:#f4f5f7; --panel:#ffffff; --line:#d9dce3; --text:#1d2127; --muted:#596273; --accent:#2f6fe4; --on-accent:#ffffff; --danger:#c3303a; --sel:#dbe7ff; --btn:#eceef2; --hover:#dde2ec; --logo:#f85800; color-scheme:light; } }
+:root[data-theme="ocean"], .theme-card[data-theme="ocean"] { --bg:#0b1a26; --panel:#112535; --line:#1f3a50; --text:#e3f1fb; --muted:#8fb0c8; --accent:#38bdf8; --on-accent:#062232; --danger:#ff7f8a; --sel:#17405c; --btn:#163247; --hover:#1f4561; --logo:#38bdf8; color-scheme:dark; }
+:root[data-theme="forest"], .theme-card[data-theme="forest"] { --bg:#0e1a14; --panel:#14241c; --line:#25402f; --text:#e4f3ea; --muted:#93b3a0; --accent:#34d399; --on-accent:#052e1d; --danger:#ff8f86; --sel:#1a4a35; --btn:#1a3125; --hover:#234433; --logo:#34d399; color-scheme:dark; }
+:root[data-theme="amethyst"], .theme-card[data-theme="amethyst"] { --bg:#17121f; --panel:#1f1829; --line:#3a2d4f; --text:#efe9f8; --muted:#ab9cc4; --accent:#a78bfa; --on-accent:#1b1033; --danger:#ff82a3; --sel:#3a2c5c; --btn:#2a2038; --hover:#3b2d52; --logo:#a78bfa; color-scheme:dark; }
+:root[data-theme="sand"], .theme-card[data-theme="sand"] { --bg:#f5efe3; --panel:#fffaf0; --line:#e0d5bf; --text:#2d2418; --muted:#6f5f48; --accent:#b93a09; --on-accent:#ffffff; --danger:#b91c1c; --sel:#f3dcc2; --btn:#ece2cf; --hover:#e3d6bd; --logo:#c2410c; color-scheme:light; }
+:root[data-theme="blossom"], .theme-card[data-theme="blossom"] { --bg:#fbf1f5; --panel:#ffffff; --line:#ecd3de; --text:#35202a; --muted:#7d5a6b; --accent:#c4206b; --on-accent:#ffffff; --danger:#be123c; --sel:#fbd5e5; --btn:#f5e4ec; --hover:#efd3e0; --logo:#db2777; color-scheme:light; }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; display: grid; grid-template-rows: auto minmax(0, 1fr); }
@@ -11,7 +17,7 @@ body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans
 button { font: inherit; color: inherit; background: var(--btn); border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
 button:hover { background: var(--hover); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-button.primary { background: var(--accent); color: #fff; } button.primary:hover { filter: brightness(1.12); }
+button.primary { background: var(--accent); color: var(--on-accent); } button.primary:hover { filter: brightness(1.12); }
 button.danger { color: var(--danger); }
 input, select, textarea { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
 input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
@@ -23,7 +29,7 @@ input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
 /* title bar: the window is frameless, so this row is the drag handle and holds the window buttons */
 #top { display: flex; align-items: center; gap: 4px; height: 35px; padding-left: 10px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
 #top button, #top input, #top .popmenu { -webkit-app-region: no-drag; }
-.brand { height: 16px; margin-right: 8px; }
+.brand { height: 18px; margin-right: 8px; }
 #tools { display: flex; gap: 4px; flex: 1; align-items: center; }
 #tools button { background: transparent; padding: 3px 11px; } #tools button:hover { background: var(--hover); }
 #search { max-width: 240px; margin-right: 6px; padding: 3px 10px; }
@@ -36,7 +42,7 @@ input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
 
 #lock { display: grid; place-items: center; }
 .card { width: min(420px, 92vw); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 24px; display: grid; gap: 12px; }
-.card .mark { width: 96px; height: 96px; justify-self: center; } .card .word { height: 42px; justify-self: center; }
+.card .mark { height: 84px; justify-self: center; } .card .word { height: 36px; justify-self: center; }
 #recent button { display: block; width: 100%; text-align: left; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #unlockForm { display: grid; gap: 8px; }
 
@@ -84,7 +90,7 @@ menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 4
 .checks label.check { color: var(--text); font-size: 14px; }
 
 .about { display: grid; gap: 8px; justify-items: center; text-align: center; }
-.about .mark { width: 110px; height: 110px; } .about .word { height: 44px; }
+.about .mark { height: 100px; } .about .word { height: 38px; }
 #aboutVersion { font-size: 16px; font-weight: 600; }
 #updNotes { text-align: left; white-space: pre-wrap; max-height: 150px; overflow: auto; width: 100%; background: var(--panel); border-radius: 6px; padding: 8px; font: 12px/1.4 ui-monospace, monospace; margin: 0; }
 
@@ -102,3 +108,18 @@ menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 4
 .otpbox { display: grid; gap: 6px; padding: 12px; background: var(--panel); border-radius: 8px; }
 .otpcode { font-size: 32px; letter-spacing: 3px; text-align: center; } .otpcode.small { font-size: 22px; letter-spacing: 2px; text-align: left; }
 progress { width: 100%; height: 6px; accent-color: var(--accent); }
+
+/* Logos: the PNGs are alpha shapes, painted with the theme's --logo colour through a CSS mask. */
+.logomark, .logoword { display: inline-block; background-color: var(--logo); mask-repeat: no-repeat; mask-position: center; mask-size: contain; -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; -webkit-mask-size: contain; }
+.logomark { aspect-ratio: 567 / 501; mask-image: url(logo-mark.png); -webkit-mask-image: url(logo-mark.png); }
+.logoword { aspect-ratio: 1096 / 348; mask-image: url(logo-text.png); -webkit-mask-image: url(logo-text.png); }
+
+/* Settings > Theme picker */
+.themes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.theme-card { display: grid; gap: 6px; justify-items: start; padding: 8px 10px; background: var(--bg); color: var(--text); border: 2px solid var(--line); border-radius: 10px; font-size: 12px; }
+.theme-card:hover { background: var(--bg); border-color: var(--accent); }
+.theme-card[aria-checked="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.theme-card .chips { display: flex; gap: 4px; } .theme-card .chips i { width: 14px; height: 14px; border-radius: 50%; display: block; }
+.theme-card .chips i:nth-child(1) { background: var(--panel); border: 1px solid var(--line); } .theme-card .chips i:nth-child(2) { background: var(--accent); } .theme-card .chips i:nth-child(3) { background: var(--logo); }
+.theme-card[data-theme="system"] { background: linear-gradient(100deg, #1b1d22 50%, #f4f5f7 50%); color: #888; border-color: #8b92a0; }
+.theme-card[data-theme="system"] span { background: #5b6270; color: #fff; padding: 1px 8px; border-radius: 10px; }

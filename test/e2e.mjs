@@ -98,7 +98,10 @@ await page.click('#recent button'); await page.fill('#unlockPw', 'hunter2'); awa
 await page.waitForSelector('#app:not([hidden])');
 ok((await page.textContent('#tree')).includes('Dirty'), 'auto-lock saved unsaved edits before locking');
 // branding, generator, theme
-ok(await page.evaluate(() => document.querySelector('.brand').naturalWidth > 0), 'logo mark loads in the toolbar');
+const logoInfo = (sel) => page.evaluate((s) => { const el = document.querySelector(s), cs = getComputedStyle(el), r = el.getBoundingClientRect(); return { w: r.width, h: r.height, mask: cs.maskImage || cs.webkitMaskImage, bg: cs.backgroundColor }; }, sel);
+const pngLoads = (name) => page.evaluate((n) => new Promise((res) => { const i = new Image(); i.onload = () => res(i.naturalWidth > 0); i.onerror = () => res(false); i.src = n; }), name);
+const bar = await logoInfo('#brand');
+ok(bar.mask.includes('logo-text.png') && bar.h === 18 && Math.abs(bar.w / bar.h - 3.149) < 0.05 && await pngLoads('logo-text.png') && await pngLoads('logo-mark.png'), 'the name logo is drawn in the toolbar (mask image loads, correct proportions): ' + JSON.stringify(bar));
 await page.click('#btnGen');
 ok((await page.inputValue('#gOut')).length === 20, 'generator opens with a 20 char password');
 await page.fill('#gLenN', '32'); await page.dispatchEvent('#gLenN', 'input'); await page.uncheck('#gSymbols');
@@ -133,7 +136,7 @@ ok((await page.inputValue('#ePass')) === pick && (await page.evaluate(() => docu
 await page.evaluate(() => localStorage.removeItem('kyuch.gen'));
 await page.click('#entryForm button[value=cancel]');
 const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-const setTheme = (theme) => page.evaluate((th) => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs: 500, theme: th }).then((c) => { applyTheme(c.theme); }), theme);
+const setTheme = (theme) => page.evaluate((th) => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs: 500, theme: th }).then((c) => { S.cfg = c; applyTheme(c.theme); }), theme); // keep the page's saved settings in step, like the real controls do
 await setTheme('light'); const lightBg = await bg();
 await page.click('#themeBtn'); await page.waitForTimeout(200);
 const darkBg = await bg(); await shot('dark');
@@ -141,6 +144,25 @@ ok(lightBg !== darkBg && darkBg === 'rgb(27, 29, 34)', 'theme button switches li
 await page.click('#themeBtn'); await page.waitForTimeout(200);
 ok((await bg()) === lightBg, 'theme button switches back to light'); await shot('light');
 await setTheme('dark'); ok((await bg()) === darkBg, 'settings theme "dark" applies');
+await setTheme('system');
+// Themes: 8 cards, live preview, Cancel reverts, Apply saves, the logo takes the theme colour
+const bodyBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+await setTheme('dark');
+ok((await logoInfo('#brand')).bg === 'rgb(248, 88, 0)', 'default themes keep the brand-orange logo');
+await page.click('#btnSettings'); await page.waitForSelector('#settingsDlg[open]');
+const cardIds = await page.evaluate(() => [...document.querySelectorAll('#aThemes .theme-card')].map((c) => c.dataset.theme));
+ok(JSON.stringify(cardIds) === JSON.stringify(['system', 'dark', 'light', 'ocean', 'forest', 'amethyst', 'sand', 'blossom']), 'Settings offers 8 themes: ' + cardIds.join(', '));
+await shot('themes');
+await page.click('#aThemes [data-theme="ocean"]');
+ok((await bodyBg()) === 'rgb(11, 26, 38)' && (await logoInfo('#brand')).bg === 'rgb(56, 189, 248)', 'clicking a theme previews it live and the logo takes its colour (Ocean)');
+await page.click('#settingsForm button[value=cancel]'); await page.waitForTimeout(200);
+ok((await bodyBg()) === 'rgb(27, 29, 34)', 'Cancel reverts the previewed theme');
+await page.click('#btnSettings'); await page.waitForSelector('#settingsDlg[open]');
+await page.click('#aThemes [data-theme="blossom"]'); await page.click('#settingsForm button.primary'); await page.waitForTimeout(400);
+ok((await bodyBg()) === 'rgb(251, 241, 245)' && (await page.evaluate(() => kyuch.call('cfg:get'))).theme === 'blossom', 'Apply saves the chosen theme (Blossom)');
+const expectBg = { ocean: 'rgb(11, 26, 38)', forest: 'rgb(14, 26, 20)', amethyst: 'rgb(23, 18, 31)', sand: 'rgb(245, 239, 227)', blossom: 'rgb(251, 241, 245)' };
+for (const [name, bg] of Object.entries(expectBg)) { await setTheme(name); if ((await bodyBg()) !== bg) throw new Error('FAIL: theme ' + name + ' background ' + (await bodyBg())); await shot('theme-' + name); }
+ok(true, 'all five new themes apply their own colours');
 await setTheme('system');
 // title bar size (was 44 px; -20% = 35 px) and smaller window buttons
 const dims = await page.evaluate(() => ({ bar: document.getElementById('top').getBoundingClientRect().height, btn: document.getElementById('wMin').getBoundingClientRect().width, glyph: document.querySelector('#wClose svg').getBoundingClientRect().width }));
@@ -214,7 +236,7 @@ await page.click('#wMin'); await page.waitForTimeout(500);
 ok(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized()), 'minimize button minimizes the window');
 await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.restore(); w.show(); w.focus(); }); await page.waitForTimeout(400);
 await page.click('#btnAbout'); await page.waitForSelector('#aboutDlg[open]');
-ok((await page.textContent('#aboutVersion')).includes(JSON.parse(fs.readFileSync(K + '/package.json', 'utf8')).version) && (await page.textContent('#aboutDlg')).includes('Made by NoSwear32') && await page.evaluate(() => [...document.querySelectorAll('#aboutDlg img')].every((i) => i.naturalWidth > 0)), 'About shows logo, version and author');
+ok((await page.textContent('#aboutVersion')).includes(JSON.parse(fs.readFileSync(K + '/package.json', 'utf8')).version) && (await page.textContent('#aboutDlg')).includes('Made by NoSwear32') && await page.evaluate(() => document.querySelectorAll('#aboutDlg .logomark, #aboutDlg .logoword').length === 2), 'About shows logo, version and author');
 await page.click('#updCheck'); await page.waitForFunction(() => document.getElementById('updStatus').textContent.includes('available')); await shot('about');
 ok((await page.textContent('#updNotes')).includes('Mock release notes') && await page.isVisible('#updInstall'), 'update check finds the newer (mock) release');
 slow = true;

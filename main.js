@@ -5,6 +5,7 @@ const { Vault, DEFAULTS } = require('./core');
 const autotype = require('./autotype');
 const { createUpdater } = require('./updater');
 const totp = require('./totp');
+const { THEMES } = require('./renderer/themes.js');
 
 // Where releases come from. Dev runs may point KYUCH_UPDATE_API at a local test server; packaged builds never do.
 const UPDATE_API = (!app.isPackaged && process.env.KYUCH_UPDATE_API) || 'https://api.github.com/repos/NoSwear32/Kyuch/releases/latest';
@@ -18,7 +19,11 @@ const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
 let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: true, lastUpdateCheck: 0 };
 try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; } catch { /* first run */ }
 delete cfg.typeStartDelay; // pre-0.3.2 setting, was in seconds
-const applyTheme = () => { nativeTheme.themeSource = ['system', 'light', 'dark'].includes(cfg.theme) ? cfg.theme : 'system'; };
+// Native widgets (file dialogs, message boxes) follow the dark/light kind of the chosen theme.
+const applyTheme = () => {
+  const t = THEMES.find((x) => x.id === cfg.theme && x.id !== 'system');
+  nativeTheme.themeSource = t ? (t.dark ? 'dark' : 'light') : 'system';
+};
 const saveCfg = () => fs.writeFileSync(cfgFile(), JSON.stringify(cfg));
 const remember = (p) => { cfg.recent = [p, ...cfg.recent.filter((r) => r !== p)].slice(0, 8); saveCfg(); };
 
@@ -74,7 +79,7 @@ async function adopt(v) {
 const handlers = {
   'cfg:get': () => cfg,
   'cfg:set': (c) => {
-    cfg = { ...cfg, autoLockMin: Math.max(0, +c.autoLockMin || 0), altTabDelayMs: Math.min(10000, Math.max(0, Math.round(+c.altTabDelayMs) || 0)), theme: c.theme ?? cfg.theme, autoUpdateCheck: c.autoUpdateCheck === undefined ? cfg.autoUpdateCheck : !!c.autoUpdateCheck };
+    cfg = { ...cfg, autoLockMin: Math.max(0, +c.autoLockMin || 0), altTabDelayMs: Math.min(10000, Math.max(0, Math.round(+c.altTabDelayMs) || 0)), theme: THEMES.some((t) => t.id === c.theme) ? c.theme : cfg.theme, autoUpdateCheck: c.autoUpdateCheck === undefined ? cfg.autoUpdateCheck : !!c.autoUpdateCheck };
     applyTheme(); saveCfg(); return cfg;
   },
   'clip:copy': ({ text }) => copy(String(text), DEFAULTS.clipboardClear), // generator output; auto-clears like entry passwords

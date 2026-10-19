@@ -1,10 +1,10 @@
 {
   "name": "kyuch",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "Kyuch - a KeePass-compatible password manager",
   "main": "main.js",
   "scripts": {
-    "test": "node --test test/core.test.js test/updater.test.js test/totp.test.js",
+    "test": "node --test test/core.test.js test/updater.test.js test/totp.test.js test/themes.test.js",
     "start": "electron .",
     "deb": "bash scripts/build-deb.sh"
   },

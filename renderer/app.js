@@ -31,9 +31,12 @@ function show(dlg) {
 }
 
 // ---------- theme: explicit data-theme wins, "system" follows the OS ----------
-const isDark = () => document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+const isDark = () => {
+  const t = THEMES.find((x) => x.id === document.documentElement.dataset.theme);
+  return t ? t.dark : matchMedia('(prefers-color-scheme: dark)').matches; // no data-theme = "System"
+};
 const paintThemeBtn = () => { $('themeBtn').textContent = isDark() ? 'Light mode' : 'Dark mode'; };
-function applyTheme(theme) { if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; paintThemeBtn(); }
+function applyTheme(theme) { if (THEMES.some((t) => t.id === theme && t.id !== 'system')) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; paintThemeBtn(); }
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeBtn);
 
 // ---------- state ----------
@@ -369,11 +372,17 @@ function editFolder(id, parentId) {
 
 // ---------- settings dialog ----------
 async function appSettings() {
-  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.altTabDelayMs; $('aTheme').value = S.cfg.theme || 'system'; $('aAutoUpd').checked = S.cfg.autoUpdateCheck !== false; $('aNewPw').value = '';
+  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.altTabDelayMs; $('aAutoUpd').checked = S.cfg.autoUpdateCheck !== false; $('aNewPw').value = '';
   $('dbInfo').textContent = `${S.name} — ${S.path} — KDBX${S.legacy ? 3 : 4}`;
-  if (!(await show($('settingsDlg')))) return;
+  let chosen = S.cfg.theme || 'system';
+  const cards = THEMES.map((t) => h('button', { type: 'button', class: 'theme-card', 'data-theme': t.id, role: 'radio', onclick: () => { chosen = t.id; applyTheme(chosen); mark(); } },
+    h('span', {}, t.label), t.id === 'system' ? null : h('span', { class: 'chips' }, h('i'), h('i'), h('i'))));
+  const mark = () => cards.forEach((c) => c.setAttribute('aria-checked', String(c.dataset.theme === chosen)));
+  $('aThemes').replaceChildren(...cards); mark(); // clicking a card previews it live
+  const ok = await show($('settingsDlg'));
+  if (!ok) { applyTheme(S.cfg.theme); return; }  // Cancel / Esc: back to the saved theme
   await act(async () => {
-    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: $('aTheme').value, autoUpdateCheck: $('aAutoUpd').checked });
+    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: chosen, autoUpdateCheck: $('aAutoUpd').checked });
     applyTheme(S.cfg.theme);
     armIdle();
     if ($('aNewPw').value) { setState(await call('db:changePassword', { password: $('aNewPw').value })); toast('Master password changed'); }

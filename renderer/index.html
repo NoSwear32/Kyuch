@@ -10,7 +10,7 @@
 <body>
 
 <header id="top">
-  <img id="brand" class="brand" src="logo-text.svg" alt="Kyuch" hidden>
+  <span id="brand" class="brand logoword" role="img" aria-label="Kyuch" hidden></span>
   <div id="tools" hidden>
     <div class="menuwrap">
       <button id="btnAdd" aria-haspopup="menu" aria-expanded="false">Add ▾</button>
@@ -35,7 +35,7 @@
 
 <main id="lock" hidden>
   <div class="card">
-    <img class="mark" src="logo-mark.svg" alt=""><img class="word" src="logo-text.svg" alt="Kyuch">
+    <span class="mark logomark" role="img" aria-label=""></span><span class="word logoword" role="img" aria-label="Kyuch"></span>
     <div id="recent"></div>
     <form id="unlockForm" hidden>
       <div class="muted" id="unlockPath"></div>
@@ -172,7 +172,8 @@
     <label>Auto-lock after idle minutes (0 = never) <input id="aLock" type="number" min="0"></label>
     <label>Alt+Tab delay (milliseconds to wait before auto-type presses Alt+Tab) <input id="aDelay" type="number" min="0" max="10000" step="50"></label>
     <label class="check"><input type="checkbox" id="aAutoUpd"> Check for updates once a day when Kyuch starts</label>
-    <label>Theme <select id="aTheme"><option value="system">Follow system</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+    <div class="muted">Theme</div>
+    <div id="aThemes" class="themes" role="radiogroup" aria-label="Theme"></div>
     <label>Change master password <input id="aNewPw" type="password" autocomplete="off" placeholder="New master password (leave empty to keep)"></label>
     <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Apply</button></menu>
   </form>
@@ -181,7 +182,7 @@
 <dialog id="aboutDlg">
   <form method="dialog" id="aboutForm">
     <div class="about">
-      <img class="mark" src="logo-mark.svg" alt=""><img class="word" src="logo-text.svg" alt="Kyuch">
+      <span class="mark logomark" role="img" aria-label=""></span><span class="word logoword" role="img" aria-label="Kyuch"></span>
       <div id="aboutVersion">Version</div>
       <div class="muted">Made by NoSwear32</div>
       <div id="updStatus" class="muted" role="status"></div>
@@ -212,6 +213,7 @@
 
 <button id="themeBtn" title="Toggle dark / light mode"></button>
 <div id="toast" hidden></div>
+<script src="themes.js"></script>
 <script src="icons.js"></script>
 <script src="gen.js"></script>
 <script src="app.js"></script>
