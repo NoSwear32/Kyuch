@@ -135,3 +135,26 @@ test('custom icons: add, assign, persist, unused ones are cleaned on save', asyn
 test('auto-type alt+tab key', () => {
   assert.deepEqual(keyEvents([{ key: 'alttab' }], LAYOUTS.gb), ['56:1', '15:1', '15:0', '56:0']);
 });
+
+test('one-time password: stored as KeePassXC-style otp field, survives save/load, feeds {OTP}', async () => {
+  const totp = require('../totp');
+  const uri = 'otpauth://totp/Ex:me?secret=JBSWY3DPEHPK3PXP&issuer=Ex&period=30&digits=6&algorithm=SHA1';
+  const v = await Vault.create(tmp, 'master pw');
+  const plain = v.addEntry(v.root.uuid.id, { title: 'no otp' });
+  const id = v.addEntry(v.root.uuid.id, { title: 'with otp', otp: uri });
+  assert.throws(() => v.addEntry(v.root.uuid.id, { title: 'bad', otp: 'not base32 !!' }));
+  assert.equal(v.otpInfo(plain), null);
+  await v.save();
+  const r = await Vault.open(tmp, 'master pw');
+  const t = r.tree();
+  assert.equal(t.entries.find((e) => e.id === id).hasOtp, true); assert.equal(t.entries.find((e) => e.id === plain).hasOtp, false);
+  assert.equal(JSON.stringify(t).includes('JBSWY3DP'), false, 'tree must not leak the secret');
+  assert.equal(r.getEntry(id).otp, uri);
+  assert.equal(r.secret(id, 'otp'), uri);                                    // the field name other KeePass apps read
+  const now = 1_700_000_000_000, expect = totp.code(totp.parse(uri), now).code;
+  assert.equal(r.otpInfo(id, now).code, expect);
+  assert.match(r.typeInfo(id).fields.OTP, /^\d{6}$/);
+  assert.equal(r.typeInfo(plain).fields.OTP, '');
+  r.updateEntry(id, { otp: '' });                                             // remove it again
+  assert.equal(r.otpInfo(id), null); assert.equal(r.getEntry(id).otp, '');
+});

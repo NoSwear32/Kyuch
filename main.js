@@ -4,6 +4,7 @@ const path = require('node:path');
 const { Vault, DEFAULTS } = require('./core');
 const autotype = require('./autotype');
 const { createUpdater } = require('./updater');
+const totp = require('./totp');
 
 // Where releases come from. Dev runs may point KYUCH_UPDATE_API at a local test server; packaged builds never do.
 const UPDATE_API = (!app.isPackaged && process.env.KYUCH_UPDATE_API) || 'https://api.github.com/repos/NoSwear32/Kyuch/releases/latest';
@@ -159,8 +160,19 @@ const handlers = {
   'entry:update': ({ id, ...p }) => (vault.updateEntry(id, p), state()),
   'entry:delete': ({ id }) => (vault.deleteEntry(id), state()),
   'entry:get': ({ id }) => vault.getEntry(id),
+  'entry:otp': ({ id }) => vault.otpInfo(id),
+  // live preview while editing: validates input (bare secret or otpauth:// link) and returns the normalized link + current code
+  'otp:preview': ({ input, digits, period, algorithm }) => {
+    const c = totp.parse(input, { digits, period, algorithm });
+    return { uri: totp.build(c), digits: c.digits, period: c.period, algorithm: c.algorithm, ...totp.code(c) };
+  },
 
   'entry:copy': ({ id, field }) => {
+    if (field === 'otp') { // copy the current code, not the secret
+      const c = vault.otpInfo(id);
+      if (!c) throw new Error('This entry has no one-time password');
+      return copy(c.code, vault.clipboardClear(id));
+    }
     const f = { username: 'UserName', password: 'Password', url: 'URL' }[field];
     if (!f) throw new Error('Unknown field');
     copy(vault.secret(id, f), vault.clipboardClear(id));

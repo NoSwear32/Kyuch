@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const kdbxweb = require('kdbxweb');
 const { argon2d, argon2id } = require('hash-wasm');
+const totp = require('./totp');
 const { ProtectedValue, KdbxUuid } = kdbxweb;
 
 // Electron's BoringSSL has no crypto.argon2, so use WASM (memory is in KiB for both APIs).
@@ -139,7 +140,7 @@ class Vault {
         entries: g.entries.map((e) => ({
           id: e.uuid.id, title: str(e.fields.get('Title')), username: str(e.fields.get('UserName')),
           url: str(e.fields.get('URL')), notes: str(e.fields.get('Notes')), icon: e.icon ?? 0, customIcon: e.customIcon?.id ?? null,
-          tags: e.tags, searchable: eff.searching.value,
+          tags: e.tags, hasOtp: e.fields.has('otp'), searchable: eff.searching.value,
           autoType: e.autoType.enabled, autoTypeSeq: e.autoType.defaultSequence || '',
         })),
         groups: g.groups.map(walk),
@@ -204,6 +205,9 @@ class Vault {
     if (p.password !== undefined) e.fields.set('Password', ProtectedValue.fromString(p.password));
     this._setIcon(e, p);
     if (p.tags !== undefined) e.tags = p.tags;
+    if (p.otp !== undefined) { // otpauth:// link in the protected 'otp' field, as KeePassXC does
+      if (p.otp) { totp.parse(p.otp); e.fields.set('otp', ProtectedValue.fromString(p.otp)); } else e.fields.delete('otp');
+    }
     if (p.autoType !== undefined) e.autoType.enabled = !!p.autoType;
     if (p.autoTypeSeq !== undefined) e.autoType.defaultSequence = p.autoTypeSeq || undefined;
     this.dirty = true;
@@ -215,11 +219,18 @@ class Vault {
   getEntry(id) {
     const e = this.entry(id);
     return { id, title: str(e.fields.get('Title')), username: str(e.fields.get('UserName')), password: str(e.fields.get('Password')),
-      url: str(e.fields.get('URL')), notes: str(e.fields.get('Notes')), icon: e.icon ?? 0, customIcon: e.customIcon?.id ?? null, tags: e.tags,
+      url: str(e.fields.get('URL')), notes: str(e.fields.get('Notes')), icon: e.icon ?? 0, customIcon: e.customIcon?.id ?? null, tags: e.tags, otp: str(e.fields.get('otp')),
       autoType: e.autoType.enabled, autoTypeSeq: e.autoType.defaultSequence || '' };
   }
 
   secret(id, field) { return str(this.entry(id).fields.get(field)); }
+
+  // Current one-time code for an entry, or null if it has none. Throws a readable error if the stored data is unusable.
+  otpInfo(id, now = Date.now()) {
+    const raw = this.secret(id, 'otp');
+    if (!raw) return null;
+    try { return totp.code(totp.parse(raw), now); } catch (e) { throw new Error('Unsupported one-time password data: ' + e.message); }
+  }
 
   // Everything auto-type needs for one entry, with inherited settings resolved.
   typeInfo(id) {
@@ -230,7 +241,7 @@ class Vault {
       seq: e.autoType.defaultSequence || eff.autoTypeSeq.value,
       delay: eff.typeDelay.value,
       fields: { USERNAME: this.secret(id, 'UserName'), PASSWORD: this.secret(id, 'Password'), URL: this.secret(id, 'URL'),
-        TITLE: this.secret(id, 'Title'), NOTES: this.secret(id, 'Notes') },
+        TITLE: this.secret(id, 'Title'), NOTES: this.secret(id, 'Notes'), OTP: this.otpInfo(id)?.code ?? '' },
     };
   }
 

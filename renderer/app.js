@@ -45,8 +45,8 @@ function setState(s) {
   if (!s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
-    for (const id of ['ePass', 'aNewPw', 'nPw', 'nPw2', 'gOut']) $(id).value = '';
-    genCtl?.wipe();
+    for (const id of ['ePass', 'aNewPw', 'nPw', 'nPw2', 'gOut', 'oSecret']) $(id).value = '';
+    genCtl?.wipe(); clearInterval(detailTimer); clearInterval(otpDlgTimer); $('oCode').textContent = ''; $('oBox').hidden = true;
     query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return;
   }
   groups = new Map(); entries = new Map();
@@ -116,7 +116,25 @@ function renderList() {
   $('list').replaceChildren(bar, table);
 }
 
+let detailTimer = null;
+function otpField(e) {
+  const codeEl = h('span', { class: 'mono otpcode small' }, '…'), bar = h('progress', { max: 30, value: 0 });
+  let expires = 0, fetching = false;
+  const load = async () => {
+    fetching = true;
+    try {
+      const r = await call('entry:otp', { id: e.id });
+      if (selEntry !== e.id) return;
+      codeEl.textContent = fmtCode(r.code); bar.max = r.period; expires = r.validUntil;
+    } catch (err) { codeEl.textContent = err.message; clearInterval(detailTimer); } finally { fetching = false; }
+  };
+  clearInterval(detailTimer); load();
+  detailTimer = setInterval(() => { const left = Math.max(0, (expires - Date.now()) / 1000); bar.value = left; if (left <= 0 && !fetching) load(); }, 500);
+  return h('div', { class: 'field' }, h('label', {}, 'One-time password'), h('div', { class: 'v' }, codeEl, h('button', { onclick: () => copy(e.id, 'otp') }, 'Copy')), bar);
+}
+
 function renderDetail() {
+  clearInterval(detailTimer);
   const hit = entries.get(selEntry);
   if (!hit) return $('detail').replaceChildren(h('div', { class: 'muted' }, 'Select an entry'));
   const { e, g } = hit;
@@ -129,6 +147,7 @@ function renderDetail() {
     field('Password', pw,
       h('button', { onclick: () => act(async () => { reveal = reveal?.id === e.id ? null : { id: e.id, text: (await call('entry:get', { id: e.id })).password }; renderDetail(); }) }, reveal?.id === e.id ? 'Hide' : 'Show'),
       h('button', { onclick: () => copy(e.id, 'password') }, 'Copy')),
+    e.hasOtp ? otpField(e) : null,
     e.url ? field('URL', e.url, h('button', { onclick: () => copy(e.id, 'url') }, 'Copy'), h('button', { onclick: () => act(() => call('entry:open', { id: e.id })) }, 'Open')) : null,
     e.notes ? field('Comments', e.notes) : null,
     e.tags.length ? field('Tags', e.tags.join(', ')) : null,
@@ -140,7 +159,7 @@ function renderDetail() {
 }
 
 // ---------- actions ----------
-const copy = (id, field) => act(async () => { await call('entry:copy', { id, field }); toast(`${field[0].toUpperCase() + field.slice(1)} copied`); });
+const copy = (id, field) => act(async () => { await call('entry:copy', { id, field }); toast(field === 'otp' ? 'One-time password copied' : `${field[0].toUpperCase() + field.slice(1)} copied`); });
 const autoType = (id) => act(() => call('entry:autotype', { id }));
 const move = (id, toId) => act(async () => { if (id && id !== toId) { expanded.add(toId); setState(await call('move', { id, toId })); } });
 const update = (ch, arg) => act(async () => setState(await call(ch, arg)));
@@ -241,8 +260,52 @@ async function openGenerator(useButton) {
 }
 $('btnGen').onclick = () => openGenerator(false);
 
+// ---------- one-time password (TOTP) tab ----------
+const fmtCode = (c) => { const k = Math.ceil(c.length / 2); return c.slice(0, k) + ' ' + c.slice(k); }; // 123456 -> 123 456
+let otpState = { uri: '', bad: false }, otpSeq = 0, otpExpires = 0, otpDlgTimer = null, otpWasLink = false;
+
+function setTab(name) {
+  const otp = name === 'otp';
+  $('panelDetails').hidden = otp; $('panelOtp').hidden = !otp;
+  $('tabBtnDetails').setAttribute('aria-selected', String(!otp)); $('tabBtnOtp').setAttribute('aria-selected', String(otp));
+}
+$('tabBtnDetails').onclick = () => setTab('details');
+$('tabBtnOtp').onclick = () => { setTab('otp'); $('oSecret').focus(); };
+$('oShow').onclick = () => { const hidden = $('oSecret').type === 'password'; $('oSecret').type = hidden ? 'text' : 'password'; $('oShow').textContent = hidden ? 'Hide' : 'Show'; };
+
+async function otpPreview() {
+  const mine = ++otpSeq, input = $('oSecret').value.trim();
+  const isLink = /^otpauth:/i.test(input);
+  if (otpWasLink && !isLink) { $('oDigits').value = '6'; $('oPeriod').value = '30'; $('oAlg').value = 'SHA1'; } // link replaced by a bare secret: back to defaults
+  otpWasLink = isLink;
+  for (const id of ['oDigits', 'oPeriod', 'oAlg']) $(id).disabled = isLink; // a pasted link carries its own settings
+  if (!input) { otpState = { uri: '', bad: false }; $('oBox').hidden = true; $('oErr').textContent = ''; return; }
+  try {
+    const r = await call('otp:preview', { input, digits: $('oDigits').value, period: $('oPeriod').value, algorithm: $('oAlg').value });
+    if (mine !== otpSeq) return; // a newer keystroke already superseded this answer
+    otpState = { uri: r.uri, bad: false }; $('oErr').textContent = '';
+    $('oDigits').value = r.digits; $('oPeriod').value = r.period; $('oAlg').value = r.algorithm;
+    $('oBox').hidden = false; $('oCode').textContent = fmtCode(r.code); $('oBar').max = r.period; otpExpires = r.validUntil; tickOtp();
+  } catch (e) {
+    if (mine !== otpSeq) return;
+    otpState = { uri: '', bad: true }; $('oBox').hidden = true; $('oErr').textContent = e.message;
+  }
+}
+function tickOtp() {
+  if (!otpState.uri) return;
+  const left = Math.max(0, (otpExpires - Date.now()) / 1000);
+  $('oBar').value = left; $('oInfo').textContent = `New code in ${Math.ceil(left)} s`;
+  if (left <= 0) { otpExpires = Infinity; otpPreview(); } // next time window: fetch the next code once
+}
+for (const id of ['oSecret', 'oDigits', 'oPeriod', 'oAlg']) $(id).addEventListener('input', otpPreview);
+$('oCopy').onclick = () => act(async () => { await call('clip:copy', { text: $('oCode').textContent.replace(' ', '') }); toast('One-time password copied'); });
+// An unusable one-time password must not be saved silently: keep the dialog open and show the problem.
+$('entryForm').addEventListener('submit', (e) => {
+  if (e.submitter?.value === 'ok' && otpState.bad) { e.preventDefault(); setTab('otp'); toast('Fix the one-time password, or clear that field', true); }
+});
+
 async function editEntry(id) {
-  const base = id ? await act(() => call('entry:get', { id })) : { title: '', username: '', password: '', url: '', notes: '', icon: 0, tags: [], autoType: true, autoTypeSeq: '' };
+  const base = id ? await act(() => call('entry:get', { id })) : { title: '', username: '', password: '', url: '', notes: '', icon: 0, tags: [], autoType: true, autoTypeSeq: '', otp: '' };
   if (!base) return;
   const groupId = id ? entries.get(id).g.id : selGroup, g = groups.get(groupId).g;
   let ico = { icon: base.icon, customIcon: base.customIcon ?? null };
@@ -255,10 +318,20 @@ async function editEntry(id) {
   $('eSeq').placeholder = `Inherit: ${inh.value}${inh.from ? ` (from ${inh.from})` : ''}`;
   $('eShow').onclick = () => { const hidden = $('ePass').type === 'password'; $('ePass').type = hidden ? 'text' : 'password'; $('eShow').textContent = hidden ? 'Hide' : 'Show'; };
   $('eGen').onclick = async () => { const pw = await openGenerator(true); if (pw) { $('ePass').value = pw; $('ePass').type = 'text'; $('eShow').textContent = 'Hide'; } };
-  if (!(await show($('entryDlg')))) return;
+  setTab('details');
+  $('oSecret').value = base.otp || ''; $('oSecret').type = 'password'; $('oShow').textContent = 'Show';
+  $('oDigits').value = '6'; $('oPeriod').value = '30'; $('oAlg').value = 'SHA1'; $('oBox').hidden = true; $('oErr').textContent = '';
+  otpState = { uri: base.otp || '', bad: false }; otpSeq++; otpWasLink = /^otpauth:/i.test(base.otp || '');
+  if (base.otp) otpPreview(); else for (const k of ['oDigits', 'oPeriod', 'oAlg']) $(k).disabled = false;
+  clearInterval(otpDlgTimer); otpDlgTimer = setInterval(tickOtp, 500);
+  const saved = await show($('entryDlg'));
+  clearInterval(otpDlgTimer);
+  const otp = otpState.uri;
+  $('oSecret').value = ''; $('oCode').textContent = ''; $('oBox').hidden = true; // the secret does not linger in the page
+  if (!saved) return;
   const p = {
     title: $('eTitle').value, username: $('eUser').value, password: $('ePass').value, url: $('eUrl').value.trim(), notes: $('eNotes').value, icon: ico.icon, customIcon: ico.customIcon,
-    tags: $('eTags').value.split(',').map((t) => t.trim()).filter(Boolean), autoType: $('eAuto').checked, autoTypeSeq: $('eSeq').value.trim(),
+    tags: $('eTags').value.split(',').map((t) => t.trim()).filter(Boolean), autoType: $('eAuto').checked, autoTypeSeq: $('eSeq').value.trim(), otp,
   };
   update(id ? 'entry:update' : 'entry:add', id ? { id, ...p } : { groupId, ...p });
 }

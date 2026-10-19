@@ -135,6 +135,43 @@ ok((await page.textContent('#settingsDlg')).includes('Alt+Tab delay (millisecond
 await page.fill('#aDelay', '250'); await page.click('#settingsForm button.primary'); await page.waitForTimeout(300);
 ok((await page.evaluate(() => kyuch.call('cfg:get'))).altTabDelayMs === 250, 'new Alt+Tab delay is saved (250 ms)');
 await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs: 500, theme: 'system' }));
+// One-time password tab
+const totpMod = require(K + '/totp.js');
+const near = (input, digits) => [-30000, 0, 30000].map((d) => totpMod.code(totpMod.parse(input, { digits }), Date.now() + d).code); // tolerate a window rollover mid-test
+await page.click('#btnAdd'); await page.click('#addEntry'); await page.waitForSelector('#entryDlg[open]');
+await page.fill('#eTitle', 'OTP Site'); await page.fill('#ePass', 'pw-otp');
+ok(await page.isVisible('#tabBtnOtp') && await page.isVisible('#eUser') && !(await page.isVisible('#panelOtp')), 'entry dialog has a Details tab (active) and a One-time password tab');
+await page.click('#tabBtnOtp');
+ok(await page.isVisible('#panelOtp') && !(await page.isVisible('#eUser')), 'One-time password tab replaces the details fields');
+await page.fill('#oSecret', 'JBSWY3DPEHPK3PXP');
+await page.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
+const shown = (await page.textContent('#oCode')).replace(' ', '');
+await shot('otp'); ok(near('JBSWY3DPEHPK3PXP').includes(shown) && await page.isVisible('#oBar'), 'secret key shows the matching 6-digit code with a countdown: ' + shown);
+await page.fill('#oSecret', 'otpauth://totp/Ex:me?secret=JBSWY3DPEHPK3PXP&issuer=Ex&digits=8&period=60&algorithm=SHA256');
+await page.waitForFunction(() => document.getElementById('oCode').textContent.replace(' ', '').length === 8);
+const linkVals = await page.evaluate(() => [oDigits.value, oPeriod.value, oAlg.value, oDigits.disabled]);
+ok(JSON.stringify(linkVals) === JSON.stringify(['8', '60', 'SHA256', true]), 'a pasted otpauth:// link fills (and locks) digits, period and algorithm');
+await page.fill('#oSecret', '1!!');
+await page.waitForFunction(() => document.getElementById('oErr').textContent.length > 0);
+await page.click('#entryForm button.primary'); await page.waitForTimeout(300);
+ok(await page.evaluate(() => document.getElementById('entryDlg').open) && await page.isVisible('#panelOtp'), 'an invalid secret blocks saving and keeps the OTP tab open');
+await page.fill('#oSecret', 'JBSWY3DPEHPK3PXP');
+await page.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
+ok(JSON.stringify(await page.evaluate(() => [oDigits.value, oPeriod.value, oAlg.value, oDigits.disabled])) === JSON.stringify(['6', '30', 'SHA1', false]), 'replacing a link with a bare secret resets digits/period/algorithm to defaults');
+await page.click('#entryForm button.primary'); await page.waitForTimeout(400);
+ok(await page.evaluate(() => document.getElementById('oSecret').value === ''), 'secret field is cleared after the dialog closes');
+await page.click('tbody tr:has-text("OTP Site")');
+await page.waitForFunction(() => /^\d{3} \d{3}$/.test((document.querySelector('#detail .otpcode') || {}).textContent || ''));
+const dShown = (await page.textContent('#detail .otpcode')).replace(' ', '');
+ok((await page.textContent('#detail')).includes('One-time password') && near('JBSWY3DPEHPK3PXP').includes(dShown), 'detail pane shows the live code: ' + dShown);
+await page.click('#detail .field:has-text("One-time password") button'); await page.waitForTimeout(200);
+ok((await app.evaluate(({ clipboard }) => clipboard.readText())) === (await page.textContent('#detail .otpcode')).replace(' ', ''), 'Copy puts the current code (not the secret) on the clipboard');
+await page.click('#detail button:has-text("Edit")'); await page.waitForSelector('#entryDlg[open]'); await page.click('#tabBtnOtp');
+await page.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
+ok((await page.inputValue('#oSecret')).startsWith('otpauth://totp/') && (await page.inputValue('#oSecret')).includes('JBSWY3DPEHPK3PXP'), 'editing shows the stored otpauth:// link');
+await page.click('#entryForm button[value=cancel]'); await page.waitForTimeout(200);
+ok((await page.inputValue('#oSecret')) === '', 'cancel also wipes the secret from the page');
+
 // Add menu, icon picker Cancel, custom icon, window controls, About + update flow
 await page.click('#btnAdd'); ok(await page.isVisible('#addMenu') && (await page.textContent('#addMenu')).includes('Entry') && (await page.textContent('#addMenu')).includes('Folder'), 'Add button opens a menu with Entry and Folder');
 await shot('addmenu'); await page.keyboard.press('Escape'); ok(!(await page.isVisible('#addMenu')), 'Escape closes the Add menu');
