@@ -1,9 +1,13 @@
-// UI smoke test. Needs playwright from ../umbra/app. Run: mkdir -p /tmp/kt && cd /tmp/kt && node /home/noswear/Documents/Claude/kyuch/test/e2e.mjs
+// UI smoke test (drives the real app with Playwright; it is not a dependency of this project).
+// Run:  PLAYWRIGHT_FROM=/path/to/a/folder-with-node_modules-containing-playwright  node test/e2e.mjs
+// It needs the release signing key (see RELEASING.md) to sign its mock update, and never types into your real windows.
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
-const require = createRequire('/home/noswear/Documents/Claude/umbra/app/package.json');
+import path from 'node:path';
+if (!process.env.PLAYWRIGHT_FROM) throw new Error('Set PLAYWRIGHT_FROM to a folder whose node_modules contains playwright');
+const require = createRequire(path.join(process.env.PLAYWRIGHT_FROM, 'package.json'));
 const { _electron } = require('playwright');
-const K = '/home/noswear/Documents/Claude/kyuch', T = '/tmp/kt';
+const K = path.resolve(import.meta.dirname, '..'), T = '/tmp/kt';
 import http from 'node:http'; import crypto from 'node:crypto'; import os from 'node:os';
 const keyPath = os.homedir() + '/.config/kyuch-release/ed25519.pem';
 const debBytes = crypto.randomBytes(4096); let tamper = false;
