@@ -60,4 +60,4 @@ function createUpdater({ api, current, publicKey, allowLocal = false }) {
   return { check, download, install };
 }
 
-module.exports = { createUpdater, compare };
+module.exports = { createUpdater, compare, ROOT_SCRIPT };

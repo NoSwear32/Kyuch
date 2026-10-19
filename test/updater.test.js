@@ -73,3 +73,28 @@ test('refuses non-GitHub download addresses in normal mode', async () => {
   const u = mk({ allowLocal: false });
   await assert.rejects(u.download(await u.check()), /unexpected address/);
 });
+
+// The root step (run via pkexec in production). Here it runs as the current user with a fake apt-get on PATH.
+test('root install script: installs a copy only when the hash matches', () => {
+  const { execFileSync, spawnSync } = require('node:child_process');
+  const os = require('node:os'), path = require('node:path');
+  const { ROOT_SCRIPT } = require('../updater');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyuch-root-')), log = path.join(dir, 'apt.log');
+  fs.writeFileSync(path.join(dir, 'apt-get'), `#!/bin/sh\necho "$@" > "${log}"\ncp "$3" "${dir}/seen.deb"\n`, { mode: 0o755 });
+  const pkg = path.join(dir, 'a b.deb'); fs.writeFileSync(pkg, deb);          // a space in the path must survive
+  const env = { ...process.env, PATH: dir + ':' + process.env.PATH };
+  const good = crypto.createHash('sha256').update(deb).digest('hex');
+
+  execFileSync('sh', ['-c', ROOT_SCRIPT, 'sh', pkg, good], { env });
+  assert.match(fs.readFileSync(log, 'utf8'), /^install -y \/.*\/kyuch\.deb\n$/);                // apt got a root-made copy, not our file
+  assert.ok(!fs.readFileSync(log, 'utf8').includes('a b.deb'));
+  assert.ok(fs.readFileSync(path.join(dir, 'seen.deb')).equals(deb));
+
+  fs.rmSync(log);
+  const bad = spawnSync('sh', ['-c', ROOT_SCRIPT, 'sh', pkg, '0'.repeat(64)], { env });
+  assert.notEqual(bad.status, 0, 'wrong hash must fail');
+  assert.ok(!fs.existsSync(log), 'apt-get must never run when the hash is wrong');
+  const tampered = spawnSync('sh', ['-c', ROOT_SCRIPT, 'sh', pkg, crypto.createHash('sha256').update('other').digest('hex')], { env });
+  assert.notEqual(tampered.status, 0); assert.ok(!fs.existsSync(log));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
