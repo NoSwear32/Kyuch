@@ -1,6 +1,6 @@
 {
   "name": "kyuch",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Kyuch - a KeePass-compatible password manager",
   "main": "main.js",
   "scripts": {

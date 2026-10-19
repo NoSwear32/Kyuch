@@ -23,7 +23,7 @@ function parse(seq, fields) {
 }
 
 // Linux input keycodes. US layout is the base; other layouts override what differs.
-const SHIFT = 42, ALTGR = 100;
+const SHIFT = 42, ALT = 56, ALTGR = 100;
 const US = new Map();
 for (const [code, plain, shifted] of [
   [2, '1234567890-=', '!@#$%^&*()_+'], [16, 'qwertyuiop[]', 'QWERTYUIOP{}'], [30, "asdfghjkl;'", 'ASDFGHJKL:"'],
@@ -53,7 +53,7 @@ function keyEvents(actions, map) {
     evs.push(...mods.map((m) => `${m}:1`), `${k}:1`, `${k}:0`, ...mods.reverse().map((m) => `${m}:0`));
   };
   for (const a of actions) {
-    if (a.key === 'shifttab') press([SHIFT, 15]);
+    if (a.key === 'alttab') press([ALT, 15]); // switch to the previous window
     else if (a.key) press([a.key === 'tab' ? 15 : 28]);
     else if (a.text) for (const c of a.text) {
       const keys = map.get(c);

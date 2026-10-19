@@ -132,6 +132,6 @@ test('custom icons: add, assign, persist, unused ones are cleaned on save', asyn
   assert.equal(r.getEntry(eid).icon, 7);
 });
 
-test('auto-type shift+tab key', () => {
-  assert.deepEqual(keyEvents([{ key: 'shifttab' }], LAYOUTS.gb), ['42:1', '15:1', '15:0', '42:0']);
+test('auto-type alt+tab key', () => {
+  assert.deepEqual(keyEvents([{ key: 'alttab' }], LAYOUTS.gb), ['56:1', '15:1', '15:0', '56:0']);
 });

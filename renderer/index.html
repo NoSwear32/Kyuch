@@ -78,7 +78,7 @@
       <legend>Auto-type</legend>
       <label class="check"><input type="checkbox" id="eAuto"> Enabled for this entry</label>
       <label>Sequence <input id="eSeq"></label>
-      <small class="muted">Placeholders: {USERNAME} {PASSWORD} {URL} {TITLE} {NOTES} {TAB} {ENTER} {SPACE} {DELAY 500}. Every auto-type starts with Shift+Tab.</small>
+      <small class="muted">Placeholders: {USERNAME} {PASSWORD} {URL} {TITLE} {NOTES} {TAB} {ENTER} {SPACE} {DELAY 500}. Every auto-type starts with Alt+Tab (switches to the previous window).</small>
     </fieldset>
     <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></menu>
   </form>
@@ -144,7 +144,7 @@
     <h2>Settings</h2>
     <div class="muted" id="dbInfo"></div>
     <label>Auto-lock after idle minutes (0 = never) <input id="aLock" type="number" min="0"></label>
-    <label>Auto-type start delay (seconds after the window hides) <input id="aDelay" type="number" min="0"></label>
+    <label>Auto-type start delay (seconds before it presses Alt+Tab) <input id="aDelay" type="number" min="0"></label>
     <label>Theme <select id="aTheme"><option value="system">Follow system</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
     <label>Change master password <input id="aNewPw" type="password" autocomplete="off" placeholder="New master password (leave empty to keep)"></label>
     <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Apply</button></menu>

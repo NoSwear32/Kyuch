@@ -126,7 +126,7 @@ await page.click('#wMin'); await page.waitForTimeout(500);
 ok(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized()), 'minimize button minimizes the window');
 await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.restore(); w.show(); w.focus(); }); await page.waitForTimeout(400);
 await page.click('#btnAbout'); await page.waitForSelector('#aboutDlg[open]');
-ok((await page.textContent('#aboutVersion')).includes('0.3.0') && (await page.textContent('#aboutDlg')).includes('Made by NoSwear32') && await page.evaluate(() => [...document.querySelectorAll('#aboutDlg img')].every((i) => i.naturalWidth > 0)), 'About shows logo, version and author');
+ok((await page.textContent('#aboutVersion')).includes(JSON.parse(fs.readFileSync(K + '/package.json', 'utf8')).version) && (await page.textContent('#aboutDlg')).includes('Made by NoSwear32') && await page.evaluate(() => [...document.querySelectorAll('#aboutDlg img')].every((i) => i.naturalWidth > 0)), 'About shows logo, version and author');
 await page.click('#updCheck'); await page.waitForFunction(() => document.getElementById('updStatus').textContent.includes('available')); await shot('about');
 ok((await page.textContent('#updNotes')).includes('Mock release notes') && await page.isVisible('#updInstall'), 'update check finds the newer (mock) release');
 await page.click('#updInstall'); await page.waitForFunction(() => /verified|failed/i.test(document.getElementById('updStatus').textContent));
@@ -137,24 +137,7 @@ await page.waitForFunction(() => /failed/i.test(document.getElementById('updStat
 ok((await page.textContent('#updStatus')).includes('Signature check FAILED'), 'tampered update is refused'); tamper = false;
 await page.click('#aboutForm button[value=cancel]');
 await page.click('tbody tr:has-text("Iconic")');
-// auto-type through the real IPC path into another window (needs /dev/uinput access, see autotype.js)
-await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, typeStartDelay: 1 }));
-await page.click('.node:has-text("Deep")'); await page.click('tbody tr');
-const id = await page.evaluate(() => selEntry);
-await app.evaluate(async ({ BrowserWindow }) => {
-  const w = new BrowserWindow({ width: 500, height: 200, x: 50, y: 50 });
-  await w.loadURL('data:text/html,<input id=a><input id=b autofocus>');
-  w.show(); w.focus(); w.webContents.focus(); globalThis.__target = w;
-});
-const read = () => app.evaluate(async () => globalThis.__target.webContents.executeJavaScript('[a.value,b.value]'));
-await page.waitForTimeout(800);
-await page.evaluate((id) => kyuch.call('entry:autotype', { id }), id);       // inherited from Work: {PASSWORD}{ENTER}
-await page.waitForTimeout(500);
-ok(JSON.stringify(await read()) === JSON.stringify(['s3cret!', '']), 'auto-type starts with Shift+Tab (b -> a) and uses the inherited sequence: ' + JSON.stringify(await read()));
-await app.evaluate(async () => { await globalThis.__target.webContents.executeJavaScript('a.value="";b.value="";b.focus()'); globalThis.__target.focus(); });
-await page.evaluate((id) => kyuch.call('entry:update', { id, autoTypeSeq: '{USERNAME}{TAB}{PASSWORD}' }), id);
-await page.waitForTimeout(500);
-await page.evaluate((id) => kyuch.call('entry:autotype', { id }), id);       // entry override with a Tab between fields
-await page.waitForTimeout(500);
-ok(JSON.stringify(await read()) === JSON.stringify(['octo', 's3cret!']), 'entry sequence override + Tab moves between fields: ' + JSON.stringify(await read()));
+// NOTE: real auto-type (Alt+Tab + typing) is deliberately NOT run here: it types into whatever window the desktop
+// switches to, which on a real desktop is the developer's own app. Key events are covered by unit tests; the typing
+// itself is covered by the sandboxed harness (a textarea in our own window). Verify Alt+Tab by hand.
 await app.close(); mock.close();

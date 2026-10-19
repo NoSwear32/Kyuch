@@ -174,10 +174,10 @@ const handlers = {
     const t = vault.typeInfo(id);
     if (!t.enabled) throw new Error('Auto-type is disabled for this entry or its folder');
     const actions = autotype.parse(t.seq, t.fields); // validate before hiding the window
-    actions.unshift({ key: 'shifttab' });             // every auto-type starts with Shift+Tab
-    win.minimize(); // hands focus back to the window the user was in
-    await new Promise((r) => setTimeout(r, cfg.typeStartDelay * 1000));
-    try { await autotype.type(actions, t.delay); } finally { win.restore(); }
+    // Every auto-type starts with Alt+Tab, which selects the previous window; the short pause lets that window take focus.
+    actions.unshift({ key: 'alttab' }, { delay: 500 });
+    await new Promise((r) => setTimeout(r, cfg.typeStartDelay * 1000)); // time to let go of the shortcut keys
+    await autotype.type(actions, t.delay);
   },
 };
 for (const [ch, fn] of Object.entries(handlers)) {
