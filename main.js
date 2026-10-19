@@ -9,13 +9,13 @@ const totp = require('./totp');
 // Where releases come from. Dev runs may point KYUCH_UPDATE_API at a local test server; packaged builds never do.
 const UPDATE_API = (!app.isPackaged && process.env.KYUCH_UPDATE_API) || 'https://api.github.com/repos/NoSwear32/Kyuch/releases/latest';
 const updater = createUpdater({ api: UPDATE_API, current: app.getVersion(), publicKey: fs.readFileSync(path.join(__dirname, 'update-key.pub'), 'utf8'), allowLocal: !app.isPackaged });
-let pendingUpdate = null;
+let pendingUpdate = null, download = null; // download = AbortController of the transfer in progress
 
 let win, vault = null, clipTimer = null, clipText = null;
 
 // ---- app-level config (not in the database) ----
 const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
-let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system' };
+let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: true, lastUpdateCheck: 0 };
 try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; } catch { /* first run */ }
 delete cfg.typeStartDelay; // pre-0.3.2 setting, was in seconds
 const applyTheme = () => { nativeTheme.themeSource = ['system', 'light', 'dark'].includes(cfg.theme) ? cfg.theme : 'system'; };
@@ -74,7 +74,7 @@ async function adopt(v) {
 const handlers = {
   'cfg:get': () => cfg,
   'cfg:set': (c) => {
-    cfg = { ...cfg, autoLockMin: Math.max(0, +c.autoLockMin || 0), altTabDelayMs: Math.min(10000, Math.max(0, Math.round(+c.altTabDelayMs) || 0)), theme: c.theme ?? cfg.theme };
+    cfg = { ...cfg, autoLockMin: Math.max(0, +c.autoLockMin || 0), altTabDelayMs: Math.min(10000, Math.max(0, Math.round(+c.altTabDelayMs) || 0)), theme: c.theme ?? cfg.theme, autoUpdateCheck: c.autoUpdateCheck === undefined ? cfg.autoUpdateCheck : !!c.autoUpdateCheck };
     applyTheme(); saveCfg(); return cfg;
   },
   'clip:copy': ({ text }) => copy(String(text), DEFAULTS.clipboardClear), // generator output; auto-clears like entry passwords
@@ -86,11 +86,24 @@ const handlers = {
   'win:toggleMax': () => { win.isMaximized() ? win.unmaximize() : win.maximize(); return win.isMaximized(); },
   'win:close': () => win.close(), // goes through the unsaved-changes prompt
 
-  'update:check': async () => (pendingUpdate = await updater.check()),
+  'update:check': async () => { pendingUpdate = await updater.check(); cfg.lastUpdateCheck = Date.now(); saveCfg(); return pendingUpdate; },
+  'update:cancel': () => { download?.abort(); },
   'update:install': async () => {
     if (!pendingUpdate?.newer) throw new Error('Check for updates first');
-    const got = await updater.download(pendingUpdate); // throws unless the signature verifies
+    if (download) throw new Error('A download is already running');
+    download = new AbortController();
+    let got, last = 0;
+    try {
+      got = await updater.download(pendingUpdate, { // throws unless the signature verifies
+        signal: download.signal,
+        onProgress: (received, total) => { // ~10 updates a second is plenty for a progress bar
+          const now = Date.now();
+          if (now - last > 100 || received === total) { last = now; win?.webContents.send('update:progress', { phase: 'download', received, total }); }
+        },
+      });
+    } finally { download = null; }
     if (!(app.isPackaged && process.execPath.startsWith('/opt/Kyuch/'))) return { installed: false, file: got.file };
+    win?.webContents.send('update:progress', { phase: 'install' }); // the download can no longer be cancelled; the password prompt follows
     await updater.install(got);
     return { installed: true };
   },
@@ -125,7 +138,9 @@ const handlers = {
     if (vault && vault.path !== p && !(await canLeave())) return null;
     let v;
     try { v = await Vault.open(p, password); } catch (e) {
-      throw new Error(/credentials|hmac|key/i.test(e.message) || e.code === 'InvalidKey' ? 'Wrong master password' : e.message);
+      if (e.code === 'ENOENT') throw new Error('That database file no longer exists');       // never echo the file path
+      if (e.code === 'EACCES') throw new Error('Kyuch is not allowed to read that file');
+      throw new Error(/credentials|hmac|key/i.test(e.message) || e.code === 'InvalidKey' ? 'Wrong master password' : e.message.replaceAll(p, 'the database'));
     }
     return adopt(v);
   },
@@ -199,6 +214,15 @@ for (const [ch, fn] of Object.entries(handlers)) {
   });
 }
 
+async function autoCheck() {
+  if (!cfg.autoUpdateCheck || Date.now() - (cfg.lastUpdateCheck || 0) < 24 * 3600 * 1000) return;
+  try {
+    const u = await updater.check();
+    cfg.lastUpdateCheck = Date.now(); saveCfg(); // only a successful check counts, so an offline launch tries again next time
+    if (u.newer) { pendingUpdate = u; win?.webContents.send('update:available', u); }
+  } catch { /* offline, rate-limited, or no release yet: stay quiet */ }
+}
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   applyTheme();
@@ -216,5 +240,7 @@ app.whenReady().then(() => {
     if (await canLeave()) { closing = true; clearClipboard(); win.close(); }
   });
   win.loadFile('renderer/index.html');
+  // Once a day (24 h since the last successful check), shortly after launch: look for a newer release and, if there is one, tell the page.
+  win.webContents.once('did-finish-load', () => setTimeout(autoCheck, (!app.isPackaged && +process.env.KYUCH_AUTOCHECK_DELAY_MS) || 3000));
 });
 app.on('window-all-closed', () => app.quit());

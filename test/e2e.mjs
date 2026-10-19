@@ -10,18 +10,25 @@ const { _electron } = require('playwright');
 const K = path.resolve(import.meta.dirname, '..'), T = '/tmp/kt';
 import http from 'node:http'; import crypto from 'node:crypto'; import os from 'node:os';
 const keyPath = os.homedir() + '/.config/kyuch-release/ed25519.pem';
-const debBytes = crypto.randomBytes(4096); let tamper = false;
+const debBytes = crypto.randomBytes(1_500_000); let tamper = false, slow = false;
 const sig = crypto.sign(null, debBytes, crypto.createPrivateKey(fs.readFileSync(keyPath))).toString('base64');
 const mock = http.createServer((req, res) => {
   const base = 'http://127.0.0.1:' + mock.address().port;
   if (req.url === '/api') return res.end(JSON.stringify({ tag_name: 'v9.9.9', body: 'Mock release notes', html_url: base, assets: [
-    { name: 'kyuch_9.9.9_amd64.deb', browser_download_url: base + '/d.deb', size: 4096 }, { name: 'kyuch_9.9.9_amd64.deb.sig', browser_download_url: base + '/d.sig' }] }));
-  if (req.url === '/d.deb') return res.end(tamper ? Buffer.concat([debBytes, Buffer.from('x')]) : debBytes);
+    { name: 'kyuch_9.9.9_amd64.deb', browser_download_url: base + '/d.deb', size: 1_500_000 }, { name: 'kyuch_9.9.9_amd64.deb.sig', browser_download_url: base + '/d.sig' }] }));
+  if (req.url === '/d.deb') {
+    const body = tamper ? Buffer.concat([debBytes, Buffer.from('x')]) : debBytes;
+    res.setHeader('content-length', body.length);
+    if (!slow) return res.end(body);
+    let i = 0; const timer = setInterval(() => { if (i >= body.length) { clearInterval(timer); return res.end(); } res.write(body.subarray(i, i + 100_000)); i += 100_000; }, 120);
+    req.on('close', () => clearInterval(timer)); return;
+  }
   if (req.url === '/d.sig') return res.end(sig);
   res.statusCode = 404; res.end();
 });
 await new Promise((r) => mock.listen(0, '127.0.0.1', r));
 fs.rmSync(T + '/ud', { recursive: true, force: true }); fs.rmSync(T + '/e2e.kdbx', { force: true });
+fs.mkdirSync(T + '/ud', { recursive: true }); fs.writeFileSync(T + '/ud/config.json', JSON.stringify({ autoUpdateCheck: false }));
 const app = await _electron.launch({ executablePath: K + '/node_modules/electron/dist/electron', args: ['.', '--user-data-dir=' + T + '/ud'], cwd: K, env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1', KYUCH_UPDATE_API: 'http://127.0.0.1:' + mock.address().port + '/api' } });
 await app.evaluate(({ dialog, BrowserWindow }, f) => {
   dialog.showSaveDialog = async () => ({ canceled: false, filePath: f });
@@ -67,7 +74,13 @@ await shot('main');
 await page.fill('#search', 'octo'); ok((await page.textContent('#list')).includes('Work / Deep'), 'search finds entry with folder path'); await page.fill('#search', '');
 await page.click('#btnSave');
 await page.click('#btnLock'); await page.waitForSelector('#lock:not([hidden])'); await shot('lock');
-await page.click('#recent button'); await page.fill('#unlockPw', 'wrong'); await page.press('#unlockPw', 'Enter');
+const lockText = await page.textContent('#lock'); const recentText = await page.textContent('#recent');
+ok(recentText.trim() === 'e2e' && !lockText.includes('/') && !/\.kdbx/i.test(lockText), 'database list shows only the name (no path, no .kdbx): ' + JSON.stringify(recentText.trim()));
+await page.click('#recent button');
+ok((await page.textContent('#unlockPath')) === 'e2e', 'unlock form shows only the name');
+const missing = await page.evaluate(() => kyuch.call('db:open', { path: '/tmp/kt/does-not-exist.kdbx', password: 'x' }).then(() => 'no error', (e) => e.message));
+ok(missing === 'That database file no longer exists' && !missing.includes('/tmp'), 'a missing file error does not leak the path: ' + missing);
+await page.fill('#unlockPw', 'wrong'); await page.press('#unlockPw', 'Enter');
 await page.waitForFunction(() => document.getElementById('lockErr').textContent.length);
 ok((await page.textContent('#lockErr')) === 'Wrong master password', 'wrong password rejected with message');
 await page.fill('#unlockPw', 'hunter2'); await page.press('#unlockPw', 'Enter');
@@ -136,8 +149,11 @@ ok(Math.round(dims.bar) === 35 && Math.round(dims.btn) === 34 && Math.round(dims
 await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs: 500, theme: 'system' }));
 await page.click('#btnSettings'); await page.waitForSelector('#settingsDlg[open]');
 ok((await page.textContent('#settingsDlg')).includes('Alt+Tab delay (milliseconds') && (await page.inputValue('#aDelay')) === '500', 'Settings shows the Alt+Tab delay in milliseconds, default 500');
-await page.fill('#aDelay', '250'); await page.click('#settingsForm button.primary'); await page.waitForTimeout(300);
+ok(!(await page.isChecked('#aAutoUpd')), 'Settings has the daily update check switch (off in this run)');
+await page.check('#aAutoUpd'); await page.fill('#aDelay', '250'); await page.click('#settingsForm button.primary'); await page.waitForTimeout(300);
 ok((await page.evaluate(() => kyuch.call('cfg:get'))).altTabDelayMs === 250, 'new Alt+Tab delay is saved (250 ms)');
+ok((await page.evaluate(() => kyuch.call('cfg:get'))).autoUpdateCheck === true, 'daily update check switch is saved');
+await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: false }));
 await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs: 500, theme: 'system' }));
 // One-time password tab
 const totpMod = require(K + '/totp.js');
@@ -201,6 +217,19 @@ await page.click('#btnAbout'); await page.waitForSelector('#aboutDlg[open]');
 ok((await page.textContent('#aboutVersion')).includes(JSON.parse(fs.readFileSync(K + '/package.json', 'utf8')).version) && (await page.textContent('#aboutDlg')).includes('Made by NoSwear32') && await page.evaluate(() => [...document.querySelectorAll('#aboutDlg img')].every((i) => i.naturalWidth > 0)), 'About shows logo, version and author');
 await page.click('#updCheck'); await page.waitForFunction(() => document.getElementById('updStatus').textContent.includes('available')); await shot('about');
 ok((await page.textContent('#updNotes')).includes('Mock release notes') && await page.isVisible('#updInstall'), 'update check finds the newer (mock) release');
+slow = true;
+await page.click('#updInstall');
+await page.waitForFunction(() => { const b = document.getElementById('updBar'); return !b.hidden && b.value > 0 && b.value < b.max; });
+ok(await page.isVisible('#updBar') && await page.isVisible('#updCancel') && !(await page.isVisible('#updInstall')), 'while downloading: a progress bar and Cancel replace the Download button');
+await shot('updating');
+ok((await page.evaluate(() => getComputedStyle(document.getElementById('updCancel')).backgroundColor)) === 'rgb(217, 58, 63)', 'the Cancel button is red');
+ok(/\d+\.\d of 1\.4 MB \(\d+%\)/.test(await page.textContent('#updPct')), 'progress text shows size and percent: ' + (await page.textContent('#updPct')));
+const v1 = await page.evaluate(() => document.getElementById('updBar').value); await page.waitForTimeout(300);
+ok((await page.evaluate(() => document.getElementById('updBar').value)) > v1, 'the bar keeps advancing');
+await page.click('#updCancel');
+await page.waitForFunction(() => document.getElementById('updStatus').textContent === 'Download cancelled.');
+ok(await page.isVisible('#updInstall') && !(await page.isVisible('#updCancel')) && !(await page.isVisible('#updBar')), 'Cancel stops the download and brings back the Download button');
+slow = false;
 await page.click('#updInstall'); await page.waitForFunction(() => /verified|failed/i.test(document.getElementById('updStatus').textContent));
 ok((await page.textContent('#updStatus')).includes('signature verified'), 'signed update downloads and verifies: ' + (await page.textContent('#updStatus')).slice(0, 60));
 tamper = true;
@@ -212,4 +241,25 @@ await page.click('tbody tr:has-text("Iconic")');
 // NOTE: real auto-type (Alt+Tab + typing) is deliberately NOT run here: it types into whatever window the desktop
 // switches to, which on a real desktop is the developer's own app. Key events are covered by unit tests; the typing
 // itself is covered by the sandboxed harness (a textarea in our own window). Verify Alt+Tab by hand.
-await app.close(); mock.close();
+await app.close();
+
+// Daily update check: first launch shows the popup, the next launch within 24 h stays quiet, and the switch turns it off.
+const launch = (ud) => _electron.launch({ executablePath: K + '/node_modules/electron/dist/electron', args: ['.', '--user-data-dir=' + ud], cwd: K,
+  env: { ...process.env, KYUCH_UPDATE_API: 'http://127.0.0.1:' + mock.address().port + '/api', KYUCH_AUTOCHECK_DELAY_MS: '600' } });
+const openDialogs = (pg) => pg.evaluate(() => [...document.querySelectorAll('dialog[open]')].map((d) => d.id));
+fs.rmSync(T + '/ud2', { recursive: true, force: true });
+let a2 = await launch(T + '/ud2'), p2 = await a2.firstWindow();
+await p2.waitForSelector('#aboutDlg[open]', { timeout: 20000 });
+const popup = await p2.textContent('#aboutDlg');
+ok(popup.includes('Version 9.9.9 is available') && popup.includes('Mock release notes') && await p2.isVisible('#updInstall'), 'daily check: a popup offers the newer version on first launch of the day');
+await a2.close();
+const saved = JSON.parse(fs.readFileSync(T + '/ud2/config.json', 'utf8'));
+ok(saved.lastUpdateCheck > Date.now() - 60000, 'the successful check is remembered');
+a2 = await launch(T + '/ud2'); p2 = await a2.firstWindow(); await p2.waitForTimeout(3500);
+ok((await openDialogs(p2)).length === 0, 'second launch within a day: no check, no popup');
+await a2.close();
+fs.rmSync(T + '/ud3', { recursive: true, force: true }); fs.mkdirSync(T + '/ud3', { recursive: true }); fs.writeFileSync(T + '/ud3/config.json', JSON.stringify({ autoUpdateCheck: false }));
+a2 = await launch(T + '/ud3'); p2 = await a2.firstWindow(); await p2.waitForTimeout(3500);
+ok((await openDialogs(p2)).length === 0, 'switched off in Settings: no check at launch');
+await a2.close();
+mock.close();

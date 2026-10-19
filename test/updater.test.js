@@ -8,16 +8,23 @@ const { createUpdater, compare } = require('../updater');
 const key = crypto.generateKeyPairSync('ed25519');
 const other = crypto.generateKeyPairSync('ed25519');
 const pub = key.publicKey.export({ type: 'spki', format: 'pem' });
-const deb = crypto.randomBytes(5000);
+const deb = crypto.randomBytes(400_000);
 const sign = (data, k) => crypto.sign(null, data, k.privateKey).toString('base64');
 let server, base, tweak = {};
 
 test.before(async () => {
   server = http.createServer((req, res) => {
     const files = { '/k.deb': tweak.deb || deb, '/k.deb.sig': tweak.sig || sign(deb, key) };
+    if (req.url === '/k.deb' && tweak.slow) { // trickle the body out so a download can be watched and cancelled
+      const body = files['/k.deb']; let i = 0;
+      res.setHeader('content-length', body.length);
+      const t = setInterval(() => { if (i >= body.length) { clearInterval(t); return res.end(); } res.write(body.subarray(i, i + 40_000)); i += 40_000; }, 40);
+      req.on('close', () => clearInterval(t));
+      return;
+    }
     if (req.url === '/api') {
       const rel = { tag_name: tweak.tag || 'v0.9.0', body: 'notes', html_url: base + '/page', assets: tweak.noAssets ? [] : [
-        { name: 'kyuch_0.9.0_amd64.deb', browser_download_url: base + '/k.deb', size: 5000 }, { name: 'kyuch_0.9.0_amd64.deb.sig', browser_download_url: base + '/k.deb.sig' }] };
+        { name: 'kyuch_0.9.0_amd64.deb', browser_download_url: base + '/k.deb', size: 400000 }, { name: 'kyuch_0.9.0_amd64.deb.sig', browser_download_url: base + '/k.deb.sig' }] };
       return res.end(JSON.stringify(rel));
     }
     if (files[req.url]) return res.end(files[req.url]);
@@ -97,4 +104,23 @@ test('root install script: installs a copy only when the hash matches', () => {
   const tampered = spawnSync('sh', ['-c', ROOT_SCRIPT, 'sh', pkg, crypto.createHash('sha256').update('other').digest('hex')], { env });
   assert.notEqual(tampered.status, 0); assert.ok(!fs.existsSync(log));
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('download reports progress up to the full size', async () => {
+  tweak = { slow: true };
+  const u = mk(), calls = [];
+  await u.download(await u.check(), { onProgress: (received, total) => calls.push([received, total]) });
+  assert.ok(calls.length > 3, 'several progress events, got ' + calls.length);
+  assert.ok(calls.every(([r], i) => i === 0 || r >= calls[i - 1][0]), 'monotonic');
+  assert.deepEqual(calls.at(-1), [400_000, 400_000]);
+});
+
+test('cancel stops the download, reports it, and installs nothing', async () => {
+  tweak = { slow: true };
+  const u = mk(), ac = new AbortController(), info = await u.check();
+  let seen = 0;
+  const started = Date.now();
+  await assert.rejects(u.download(info, { signal: ac.signal, onProgress: (r) => { seen = r; if (r > 0) ac.abort(); } }), /Download cancelled/);
+  assert.ok(seen > 0 && seen < 400_000, 'stopped part-way: ' + seen);
+  assert.ok(Date.now() - started < 1000, 'cancel is immediate, not after the download');
 });

@@ -88,6 +88,8 @@ menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 4
 #aboutVersion { font-size: 16px; font-weight: 600; }
 #updNotes { text-align: left; white-space: pre-wrap; max-height: 150px; overflow: auto; width: 100%; background: var(--panel); border-radius: 6px; padding: 8px; font: 12px/1.4 ui-monospace, monospace; margin: 0; }
 
+.cancelbtn { background: #d93a3f; color: #fff; } .cancelbtn:hover { background: #ee4b50; }
+#updPct { text-align: center; }
 #themeBtn { position: fixed; right: 10px; bottom: 30px; border-radius: 20px; padding: 3px 12px; opacity: .85; z-index: 5; font-size: 12px; } #themeBtn:hover { opacity: 1; }
 #toast { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--accent); padding: 8px 16px; border-radius: 8px; z-index: 50; }
 #toast.bad { border-color: var(--danger); }

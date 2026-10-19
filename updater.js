@@ -18,14 +18,33 @@ const ROOT_SCRIPT = 'set -e; d=$(mktemp -d); trap \'rm -rf "$d"\' EXIT; cp "$1" 
 function createUpdater({ api, current, publicKey, allowLocal = false }) {
   const urlOk = (u) => typeof u === 'string' && (u.startsWith('https://github.com/') || (allowLocal && u.startsWith('http://127.0.0.1:')));
 
-  async function get(url, { json = false, max = MAX_BYTES } = {}) {
-    const res = await fetch(url, { headers: { Accept: json ? 'application/vnd.github+json' : 'application/octet-stream', 'User-Agent': 'Kyuch' }, signal: AbortSignal.timeout(10 * 60 * 1000) });
-    if (res.status === 404) throw new Error('No release has been published yet (or the repository is private).');
-    if (!res.ok) throw new Error(`Server answered ${res.status}`);
-    if (Number(res.headers.get('content-length')) > max) throw new Error('Download is unexpectedly large');
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > max) throw new Error('Download is unexpectedly large');
-    return json ? JSON.parse(buf.toString('utf8')) : buf;
+  // Streams the body so progress can be reported; `signal` cancels the transfer.
+  async function get(url, { json = false, max = MAX_BYTES, onProgress, signal } = {}) {
+    const timeout = AbortSignal.timeout(10 * 60 * 1000);
+    let res;
+    try {
+      res = await fetch(url, { headers: { Accept: json ? 'application/vnd.github+json' : 'application/octet-stream', 'User-Agent': 'Kyuch' }, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+      if (res.status === 404) throw new Error('No release has been published yet (or the repository is private).');
+      if (!res.ok) throw new Error(`Server answered ${res.status}`);
+      const total = Number(res.headers.get('content-length')) || 0;
+      if (total > max) throw new Error('Download is unexpectedly large');
+      const chunks = [];
+      let received = 0;
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.length;
+        if (received > max) throw new Error('Download is unexpectedly large');
+        chunks.push(value);
+        onProgress?.(received, total);
+      }
+      const buf = Buffer.concat(chunks);
+      return json ? JSON.parse(buf.toString('utf8')) : buf;
+    } catch (e) {
+      if (signal?.aborted) throw new Error('Download cancelled');
+      throw e;
+    }
   }
 
   async function check() {
@@ -41,11 +60,15 @@ function createUpdater({ api, current, publicKey, allowLocal = false }) {
   }
 
   // Downloads and verifies; returns {file, sha256}. Throws unless the signature matches the embedded key.
-  async function download(info) {
+  async function download(info, { onProgress, signal } = {}) {
     if (!info?.newer) throw new Error('No newer version to install');
     if (!info.deb || !info.sigUrl) throw new Error('The release is missing its .deb or .sig file, so it cannot be verified');
     if (!urlOk(info.deb.url) || !urlOk(info.sigUrl)) throw new Error('Refusing to download from an unexpected address');
-    const [data, sigText] = await Promise.all([get(info.deb.url), get(info.sigUrl, { max: 4096 })]);
+    const expected = info.deb.size || 0; // GitHub's own size, in case the CDN omits Content-Length
+    const [data, sigText] = await Promise.all([
+      get(info.deb.url, { signal, onProgress: (received, total) => onProgress?.(received, total || expected) }),
+      get(info.sigUrl, { max: 4096, signal }),
+    ]);
     const ok = crypto.verify(null, data, crypto.createPublicKey(publicKey), Buffer.from(sigText.toString('utf8').trim(), 'base64'));
     if (!ok) throw new Error('Signature check FAILED. The download was discarded and nothing was installed.');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyuch-update-')); // 0700

@@ -369,11 +369,11 @@ function editFolder(id, parentId) {
 
 // ---------- settings dialog ----------
 async function appSettings() {
-  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.altTabDelayMs; $('aTheme').value = S.cfg.theme || 'system'; $('aNewPw').value = '';
+  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.altTabDelayMs; $('aTheme').value = S.cfg.theme || 'system'; $('aAutoUpd').checked = S.cfg.autoUpdateCheck !== false; $('aNewPw').value = '';
   $('dbInfo').textContent = `${S.name} — ${S.path} — KDBX${S.legacy ? 3 : 4}`;
   if (!(await show($('settingsDlg')))) return;
   await act(async () => {
-    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: $('aTheme').value });
+    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: $('aTheme').value, autoUpdateCheck: $('aAutoUpd').checked });
     applyTheme(S.cfg.theme);
     armIdle();
     if ($('aNewPw').value) { setState(await call('db:changePassword', { password: $('aNewPw').value })); toast('Master password changed'); }
@@ -381,14 +381,21 @@ async function appSettings() {
 }
 
 // ---------- lock screen ----------
+const nameOf = (p) => p.split(/[\\/]/).pop().replace(/\.kdbx$/i, '');
+// Names only, never paths. If two databases share a name, their folder is appended to tell them apart.
+function dbLabels(paths) {
+  const names = paths.map(nameOf);
+  return paths.map((p, i) => (names.filter((n) => n === names[i]).length > 1 ? `${names[i]} (${p.split(/[\\/]/).slice(-2, -1)[0] || ''})` : names[i]));
+}
 let unlockPath = null;
 async function showRecent() {
   unlockPath = null; $('unlockForm').hidden = true; $('lockErr').textContent = '';
   const cfg = await call('cfg:get');
-  $('recent').replaceChildren(...cfg.recent.map((p) => h('button', { onclick: () => pickUnlock(p) }, p)));
+  const labels = dbLabels(cfg.recent);
+  $('recent').replaceChildren(...cfg.recent.map((p, i) => h('button', { onclick: () => pickUnlock(p, labels[i]) }, labels[i])));
 }
-function pickUnlock(p) {
-  unlockPath = p; $('unlockPath').textContent = p; $('unlockForm').hidden = false; $('unlockPw').value = ''; $('unlockPw').focus();
+function pickUnlock(p, label = nameOf(p)) {
+  unlockPath = p; $('unlockPath').textContent = label; $('unlockForm').hidden = false; $('unlockPw').value = ''; $('unlockPw').focus();
 }
 $('unlockForm').onsubmit = (e) => {
   e.preventDefault();
@@ -401,7 +408,7 @@ $('unlockForm').onsubmit = (e) => {
 $('btnOpenDb').onclick = () => act(async () => { const p = await call('pick:open'); if (p) pickUnlock(p); });
 $('btnNewDb').onclick = () => act(async () => {
   const p = await call('pick:new'); if (!p) return;
-  $('newDbPath').textContent = p; $('nPw').value = $('nPw2').value = ''; $('newDbErr').textContent = '';
+  $('newDbPath').textContent = nameOf(p); $('nPw').value = $('nPw2').value = ''; $('newDbErr').textContent = '';
   const dlg = $('newDbDlg');
   dlg.onclose = null;
   if (!(await show(dlg))) return;
@@ -438,40 +445,64 @@ kyuch.onWindowState((max) => { $('wMax').title = max ? 'Restore' : 'Maximize'; $
 $('top').addEventListener('dblclick', (e) => { if (!e.target.closest('button,input')) call('win:toggleMax'); });
 
 // ---------- About + updates ----------
-let aboutInfo = null;
-async function openAbout() {
+let aboutInfo = null, downloading = false;
+const mb = (n) => (n / 1048576).toFixed(1);
+// idle | available | downloading | installing | installed: which of the update controls are on screen
+function updUi(state) {
+  const dl = state === 'downloading';
+  $('updCheck').disabled = dl || state === 'installing';
+  $('updInstall').hidden = state !== 'available';
+  $('updCancel').hidden = !dl;                      // the red Cancel replaces "Download and install" while downloading
+  $('updBar').hidden = $('updPct').hidden = !dl;
+  $('updRestart').hidden = state !== 'installed';
+}
+function offerUpdate(u) {
+  $('updStatus').textContent = `Version ${u.latest} is available.`;
+  $('updNotes').textContent = u.notes.slice(0, 1500); $('updNotes').hidden = !u.notes;
+  $('updInstall').textContent = aboutInfo.canInstall ? 'Download and install' : 'Download and verify';
+  updUi('available');
+}
+// `found` = a check result, when the daily check opens this dialog as its popup
+async function openAbout(found) {
   aboutInfo = await call('app:info');
   $('aboutVersion').textContent = 'Version ' + aboutInfo.version;
-  $('updStatus').textContent = ''; $('updNotes').hidden = true;
-  for (const id of ['updInstall', 'updRestart']) $(id).hidden = true;
-  $('updCheck').disabled = false;
-  $('aboutDlg').showModal();
+  $('updStatus').textContent = ''; $('updNotes').hidden = true; updUi('idle');
+  if (found) offerUpdate(found);
+  if (!$('aboutDlg').open) $('aboutDlg').showModal();
 }
-$('btnAbout').onclick = () => act(openAbout);
+$('btnAbout').onclick = () => act(() => openAbout());
+kyuch.onUpdateAvailable((u) => act(() => openAbout(u)));
+
 $('updCheck').onclick = async () => {
-  const status = $('updStatus');
-  status.textContent = 'Checking…'; $('updCheck').disabled = true; $('updInstall').hidden = true; $('updNotes').hidden = true;
+  $('updStatus').textContent = 'Checking…'; $('updNotes').hidden = true; updUi('idle'); $('updCheck').disabled = true;
   try {
     const u = await call('update:check');
-    if (!u.newer) status.textContent = `You are up to date (version ${u.current}).`;
-    else {
-      status.textContent = `Version ${u.latest} is available.`;
-      $('updNotes').textContent = u.notes.slice(0, 1500); $('updNotes').hidden = !u.notes;
-      $('updInstall').textContent = aboutInfo.canInstall ? 'Download and install' : 'Download and verify'; $('updInstall').hidden = false;
-    }
-  } catch (e) { status.textContent = 'Could not check for updates: ' + e.message; }
+    if (!u.newer) $('updStatus').textContent = `You are up to date (version ${u.current}).`; else offerUpdate(u);
+  } catch (e) { $('updStatus').textContent = 'Could not check for updates: ' + e.message; }
   $('updCheck').disabled = false;
 };
+kyuch.onUpdateProgress((p) => {
+  if (p.phase === 'download') {
+    $('updBar').max = p.total || p.received || 1; $('updBar').value = p.received;
+    $('updPct').textContent = p.total ? `${mb(p.received)} of ${mb(p.total)} MB (${Math.floor((p.received * 100) / p.total)}%)` : `${mb(p.received)} MB`;
+  } else if (p.phase === 'install') { // past the point of cancelling: the system password prompt is next
+    updUi('installing'); $('updStatus').textContent = 'Installing… enter your password in the system prompt.';
+  }
+});
 $('updInstall').onclick = async () => {
-  const status = $('updStatus');
-  $('updInstall').disabled = true; status.textContent = 'Downloading and checking the signature…';
+  downloading = true; updUi('downloading');
+  $('updBar').max = 1; $('updBar').value = 0; $('updPct').textContent = 'Starting…'; $('updStatus').textContent = 'Downloading…';
   try {
     const r = await call('update:install');
-    if (r.installed) { status.textContent = 'Installed. Restart Kyuch to finish the update.'; $('updInstall').hidden = true; $('updRestart').hidden = false; }
-    else status.textContent = `Downloaded and signature verified (${r.file}). This development build does not install packages.`;
-  } catch (e) { status.textContent = 'Update failed: ' + e.message; }
-  $('updInstall').disabled = false;
+    if (r.installed) { $('updStatus').textContent = 'Installed. Restart Kyuch to finish the update.'; updUi('installed'); }
+    else { $('updStatus').textContent = `Downloaded and signature verified (${r.file}). This development build does not install packages.`; updUi('idle'); }
+  } catch (e) {
+    $('updStatus').textContent = /^Download cancelled/.test(e.message) ? 'Download cancelled.' : 'Update failed: ' + e.message;
+    updUi('available'); // allow another try
+  } finally { downloading = false; }
 };
+$('updCancel').onclick = () => act(() => call('update:cancel'));
+$('aboutDlg').addEventListener('close', () => { if (downloading) call('update:cancel').catch(() => {}); }); // closing the dialog cancels a running download
 $('updRestart').onclick = () => act(() => call('app:relaunch'));
 $('search').oninput = (e) => { query = e.target.value.trim(); selEntry = null; render(); };
 
