@@ -53,7 +53,8 @@ function keyEvents(actions, map) {
     evs.push(...mods.map((m) => `${m}:1`), `${k}:1`, `${k}:0`, ...mods.reverse().map((m) => `${m}:0`));
   };
   for (const a of actions) {
-    if (a.key) press([a.key === 'tab' ? 15 : 28]);
+    if (a.key === 'shifttab') press([SHIFT, 15]);
+    else if (a.key) press([a.key === 'tab' ? 15 : 28]);
     else if (a.text) for (const c of a.text) {
       const keys = map.get(c);
       if (!keys) throw new Error(`Cannot auto-type the character "${c}" on this keyboard layout`);

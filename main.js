@@ -1,8 +1,14 @@
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeImage, nativeTheme, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Vault, DEFAULTS } = require('./core');
 const autotype = require('./autotype');
+const { createUpdater } = require('./updater');
+
+// Where releases come from. Dev runs may point KYUCH_UPDATE_API at a local test server; packaged builds never do.
+const UPDATE_API = (!app.isPackaged && process.env.KYUCH_UPDATE_API) || 'https://api.github.com/repos/NoSwear32/Kyuch/releases/latest';
+const updater = createUpdater({ api: UPDATE_API, current: app.getVersion(), publicKey: fs.readFileSync(path.join(__dirname, 'update-key.pub'), 'utf8'), allowLocal: !app.isPackaged });
+let pendingUpdate = null;
 
 let win, vault = null, clipTimer = null, clipText = null;
 
@@ -43,7 +49,7 @@ async function canLeave() {
 }
 
 const state = () => vault && {
-  name: vault.db.meta.name, path: vault.path, dirty: vault.dirty, legacy: vault.legacy, defaults: DEFAULTS, root: vault.tree(), cfg,
+  name: vault.db.meta.name, path: vault.path, dirty: vault.dirty, legacy: vault.legacy, defaults: DEFAULTS, root: vault.tree(), icons: vault.icons(), cfg,
 };
 
 const filters = [{ name: 'KeePass database', extensions: ['kdbx'] }];
@@ -71,6 +77,34 @@ const handlers = {
   },
   'clip:copy': ({ text }) => copy(String(text), DEFAULTS.clipboardClear), // generator output; auto-clears like entry passwords
   'state': () => state(),
+  'app:info': () => ({ version: app.getVersion(), canInstall: app.isPackaged && process.execPath.startsWith('/opt/Kyuch/') }),
+
+  // window controls (the window is frameless, so the page draws its own buttons)
+  'win:minimize': () => win.minimize(),
+  'win:toggleMax': () => { win.isMaximized() ? win.unmaximize() : win.maximize(); return win.isMaximized(); },
+  'win:close': () => win.close(), // goes through the unsaved-changes prompt
+
+  'update:check': async () => (pendingUpdate = await updater.check()),
+  'update:install': async () => {
+    if (!pendingUpdate?.newer) throw new Error('Check for updates first');
+    const got = await updater.download(pendingUpdate); // throws unless the signature verifies
+    if (!(app.isPackaged && process.execPath.startsWith('/opt/Kyuch/'))) return { installed: false, file: got.file };
+    await updater.install(got);
+    return { installed: true };
+  },
+  'app:relaunch': async () => { if (await canLeave()) { clearClipboard(); app.relaunch(); app.exit(0); } },
+
+  // custom icon: pick an image, crop to a square, shrink to 64px PNG so the database stays small
+  'icon:add': async () => {
+    const r = await dialog.showOpenDialog(win, { title: 'Choose an icon image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }], properties: ['openFile'] });
+    if (r.canceled) return null;
+    let img = nativeImage.createFromPath(r.filePaths[0]);
+    if (img.isEmpty()) throw new Error('That file could not be read as a PNG or JPEG image');
+    const { width, height } = img.getSize(), side = Math.min(width, height);
+    img = img.crop({ x: Math.floor((width - side) / 2), y: Math.floor((height - side) / 2), width: side, height: side }).resize({ width: 64, height: 64, quality: 'best' });
+    const id = vault.addIcon(img.toPNG(), path.basename(r.filePaths[0]));
+    return { ...state(), newIcon: id };
+  },
 
   'pick:new': async () => {
     const r = await dialog.showSaveDialog(win, { title: 'New database', defaultPath: 'passwords.kdbx', filters });
@@ -140,6 +174,7 @@ const handlers = {
     const t = vault.typeInfo(id);
     if (!t.enabled) throw new Error('Auto-type is disabled for this entry or its folder');
     const actions = autotype.parse(t.seq, t.fields); // validate before hiding the window
+    actions.unshift({ key: 'shifttab' });             // every auto-type starts with Shift+Tab
     win.minimize(); // hands focus back to the window the user was in
     await new Promise((r) => setTimeout(r, cfg.typeStartDelay * 1000));
     try { await autotype.type(actions, t.delay); } finally { win.restore(); }
@@ -155,9 +190,10 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   applyTheme();
   win = new BrowserWindow({
-    width: 1100, height: 700, minWidth: 760, minHeight: 480, title: 'Kyuch', icon: path.join(__dirname, 'icon.png'), backgroundColor: '#1b1d22',
+    width: 1100, height: 700, minWidth: 760, minHeight: 480, frame: false, title: 'Kyuch', icon: path.join(__dirname, 'icon.png'), backgroundColor: '#1b1d22',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
+  for (const ev of ['maximize', 'unmaximize']) win.on(ev, () => win.webContents.send('win:state', win.isMaximized()));
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   let closing = false;

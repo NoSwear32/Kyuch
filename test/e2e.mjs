@@ -4,8 +4,21 @@ import fs from 'node:fs';
 const require = createRequire('/home/noswear/Documents/Claude/umbra/app/package.json');
 const { _electron } = require('playwright');
 const K = '/home/noswear/Documents/Claude/kyuch', T = '/tmp/kt';
+import http from 'node:http'; import crypto from 'node:crypto'; import os from 'node:os';
+const keyPath = os.homedir() + '/.config/kyuch-release/ed25519.pem';
+const debBytes = crypto.randomBytes(4096); let tamper = false;
+const sig = crypto.sign(null, debBytes, crypto.createPrivateKey(fs.readFileSync(keyPath))).toString('base64');
+const mock = http.createServer((req, res) => {
+  const base = 'http://127.0.0.1:' + mock.address().port;
+  if (req.url === '/api') return res.end(JSON.stringify({ tag_name: 'v9.9.9', body: 'Mock release notes', html_url: base, assets: [
+    { name: 'kyuch_9.9.9_amd64.deb', browser_download_url: base + '/d.deb', size: 4096 }, { name: 'kyuch_9.9.9_amd64.deb.sig', browser_download_url: base + '/d.sig' }] }));
+  if (req.url === '/d.deb') return res.end(tamper ? Buffer.concat([debBytes, Buffer.from('x')]) : debBytes);
+  if (req.url === '/d.sig') return res.end(sig);
+  res.statusCode = 404; res.end();
+});
+await new Promise((r) => mock.listen(0, '127.0.0.1', r));
 fs.rmSync(T + '/ud', { recursive: true, force: true }); fs.rmSync(T + '/e2e.kdbx', { force: true });
-const app = await _electron.launch({ executablePath: K + '/node_modules/electron/dist/electron', args: ['.', '--user-data-dir=' + T + '/ud'], cwd: K, env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1' } });
+const app = await _electron.launch({ executablePath: K + '/node_modules/electron/dist/electron', args: ['.', '--user-data-dir=' + T + '/ud'], cwd: K, env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1', KYUCH_UPDATE_API: 'http://127.0.0.1:' + mock.address().port + '/api' } });
 await app.evaluate(({ dialog, BrowserWindow }, f) => {
   dialog.showSaveDialog = async () => ({ canceled: false, filePath: f });
   dialog.showMessageBox = async () => ({ response: 1 });
@@ -22,17 +35,17 @@ await page.waitForSelector('#app:not([hidden])');
 ok(true, 'database created and app shown');
 
 // folder with settings, then nested folder inheriting
-await page.click('#btnFolder'); await page.fill('#fName', 'Work'); await page.selectOption('#sAuto', 'true'); await page.fill('#sSeq', '{PASSWORD}{ENTER}'); await page.fill('#sClip', '30');
+await page.click('#btnAdd'); await page.click('#addFolder'); await page.fill('#fName', 'Work'); await page.selectOption('#sAuto', 'true'); await page.fill('#sSeq', '{PASSWORD}{ENTER}'); await page.fill('#sClip', '30');
 await page.click('#folderForm button.primary');
 await page.click('.node:has-text("Work")');
-await page.click('#btnFolder'); await page.fill('#fName', 'Deep'); await page.waitForTimeout(100);
+await page.click('#btnAdd'); await page.click('#addFolder'); await page.fill('#fName', 'Deep'); await page.waitForTimeout(100);
 ok((await page.getAttribute('#sSeq', 'placeholder')).includes('{PASSWORD}{ENTER}') && (await page.getAttribute('#sSeq', 'placeholder')).includes('Work'), 'child placeholder shows inherited sequence + source');
 ok((await page.getAttribute('#sClip', 'placeholder')).includes('30'), 'child placeholder shows inherited clipboard time');
 await page.click('#folderForm button.primary');
 await page.click('.node:has-text("Deep")');
 
 // entry
-await page.click('#btnEntry'); await page.fill('#eTitle', 'GitHub'); await page.fill('#eUser', 'octo'); await page.fill('#ePass', 's3cret!'); await page.fill('#eUrl', 'github.com'); await page.fill('#eNotes', 'my comment');
+await page.click('#btnAdd'); await page.click('#addEntry'); await page.fill('#eTitle', 'GitHub'); await page.fill('#eUser', 'octo'); await page.fill('#ePass', 's3cret!'); await page.fill('#eUrl', 'github.com'); await page.fill('#eNotes', 'my comment');
 await page.click('#entryForm button.primary');
 await page.waitForSelector('tbody tr');
 await page.click('tbody tr');
@@ -60,7 +73,7 @@ ok((await page.textContent('#tree')).includes('Deep'), 'data persisted across lo
 ok(errs.length === 0, 'no renderer errors ' + errs.join('|'));
 // auto-lock with an open dialog and unsaved edits: must save, lock, and leave no dialog/password on screen
 await page.evaluate(async () => { await kyuch.call('group:add', { parentId: S.root.id, name: 'Dirty' }); });
-await page.click('#btnEntry'); await page.fill('#eTitle', 'Unsaved'); await page.fill('#ePass', 'plaintext-pw');
+await page.click('#btnAdd'); await page.click('#addEntry'); await page.fill('#eTitle', 'Unsaved'); await page.fill('#ePass', 'plaintext-pw');
 await page.evaluate(() => lock(true));
 await page.waitForSelector('#lock:not([hidden])');
 ok(await page.evaluate(() => document.querySelectorAll('dialog[open]').length === 0 && document.getElementById('ePass').value === ''), 'lock closes dialogs and clears password fields');
@@ -77,7 +90,7 @@ ok(gp.length === 32 && /^[A-Za-z0-9]+$/.test(gp), 'length + symbol toggle respec
 await page.click('#gCopy'); await page.waitForTimeout(150);
 ok(await app.evaluate(({ clipboard }) => clipboard.readText()) === gp, 'generator Copy puts the password on the clipboard');
 await page.click('#genForm button[value=cancel]');
-await page.click('#btnEntry'); await page.click('#eGen'); const gp2 = await page.inputValue('#gOut'); await page.click('#gUse');
+await page.click('#btnAdd'); await page.click('#addEntry'); await page.click('#eGen'); const gp2 = await page.inputValue('#gOut'); await page.click('#gUse');
 ok((await page.inputValue('#ePass')) === gp2 && gp2.length === 32, 'Use password fills the entry form');
 ok((await page.inputValue('#gOut')) === '', 'generator output wiped after closing');
 await page.click('#entryForm button[value=cancel]');
@@ -91,24 +104,57 @@ await page.click('#themeBtn'); await page.waitForTimeout(200);
 ok((await bg()) === lightBg, 'theme button switches back to light'); await shot('light');
 await setTheme('dark'); ok((await bg()) === darkBg, 'settings theme "dark" applies');
 await setTheme('system');
+// Add menu, icon picker Cancel, custom icon, window controls, About + update flow
+await page.click('#btnAdd'); ok(await page.isVisible('#addMenu') && (await page.textContent('#addMenu')).includes('Entry') && (await page.textContent('#addMenu')).includes('Folder'), 'Add button opens a menu with Entry and Folder');
+await shot('addmenu'); await page.keyboard.press('Escape'); ok(!(await page.isVisible('#addMenu')), 'Escape closes the Add menu');
+await page.click('#btnAdd'); await page.click('#addEntry'); await page.waitForSelector('#entryDlg[open]');
+await page.click('#eIcon'); await page.waitForSelector('#iconDlg[open]');
+await page.click('#iconClose'); await page.waitForTimeout(150);
+ok(!(await page.evaluate(() => document.getElementById('iconDlg').open)) && await page.evaluate(() => document.getElementById('entryDlg').open), 'icon picker Cancel closes it and keeps the entry dialog');
+await app.evaluate(({ dialog }, f) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] }); }, K + '/brand/png/icon-64.png');
+await page.fill('#eTitle', 'Iconic'); await page.click('#eIcon'); await page.click('#iconAdd'); await page.waitForTimeout(400);
+ok(await page.evaluate(() => !document.getElementById('iconDlg').open && !!document.querySelector('#eIcon img.ico')), 'adding a custom icon applies it and shows it on the button');
+await page.click('#entryForm button.primary'); await page.waitForTimeout(300);
+await page.click('tbody tr:has-text("Iconic")');
+ok(await page.evaluate(() => !!document.querySelector('#detail h2 img.ico') && !!document.querySelector('tbody tr.sel img.ico')), 'custom icon shown in the list and detail pane');
+await page.click('#btnSave'); await page.waitForTimeout(300);
+const wasMax = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized());
+await page.click('#wMax'); await page.waitForTimeout(500);
+ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized())) === !wasMax, 'maximize button toggles the window');
+await page.click('#wMax'); await page.waitForTimeout(300);
+await page.click('#wMin'); await page.waitForTimeout(500);
+ok(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized()), 'minimize button minimizes the window');
+await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.restore(); w.show(); w.focus(); }); await page.waitForTimeout(400);
+await page.click('#btnAbout'); await page.waitForSelector('#aboutDlg[open]');
+ok((await page.textContent('#aboutVersion')).includes('0.3.0') && (await page.textContent('#aboutDlg')).includes('Made by NoSwear32') && await page.evaluate(() => [...document.querySelectorAll('#aboutDlg img')].every((i) => i.naturalWidth > 0)), 'About shows logo, version and author');
+await page.click('#updCheck'); await page.waitForFunction(() => document.getElementById('updStatus').textContent.includes('available')); await shot('about');
+ok((await page.textContent('#updNotes')).includes('Mock release notes') && await page.isVisible('#updInstall'), 'update check finds the newer (mock) release');
+await page.click('#updInstall'); await page.waitForFunction(() => /verified|failed/i.test(document.getElementById('updStatus').textContent));
+ok((await page.textContent('#updStatus')).includes('signature verified'), 'signed update downloads and verifies: ' + (await page.textContent('#updStatus')).slice(0, 60));
+tamper = true;
+await page.click('#updCheck'); await page.waitForFunction(() => document.getElementById('updStatus').textContent.includes('available')); await page.click('#updInstall');
+await page.waitForFunction(() => /failed/i.test(document.getElementById('updStatus').textContent));
+ok((await page.textContent('#updStatus')).includes('Signature check FAILED'), 'tampered update is refused'); tamper = false;
+await page.click('#aboutForm button[value=cancel]');
+await page.click('tbody tr:has-text("Iconic")');
 // auto-type through the real IPC path into another window (needs /dev/uinput access, see autotype.js)
 await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, typeStartDelay: 1 }));
 await page.click('.node:has-text("Deep")'); await page.click('tbody tr');
 const id = await page.evaluate(() => selEntry);
 await app.evaluate(async ({ BrowserWindow }) => {
   const w = new BrowserWindow({ width: 500, height: 200, x: 50, y: 50 });
-  await w.loadURL('data:text/html,<input id=a autofocus><input id=b>');
+  await w.loadURL('data:text/html,<input id=a><input id=b autofocus>');
   w.show(); w.focus(); w.webContents.focus(); globalThis.__target = w;
 });
 const read = () => app.evaluate(async () => globalThis.__target.webContents.executeJavaScript('[a.value,b.value]'));
 await page.waitForTimeout(800);
 await page.evaluate((id) => kyuch.call('entry:autotype', { id }), id);       // inherited from Work: {PASSWORD}{ENTER}
 await page.waitForTimeout(500);
-ok(JSON.stringify(await read()) === JSON.stringify(['s3cret!', '']), 'auto-type uses the sequence inherited from the parent folder: ' + JSON.stringify(await read()));
-await app.evaluate(async () => { await globalThis.__target.webContents.executeJavaScript('a.value="";b.value="";a.focus()'); globalThis.__target.focus(); });
+ok(JSON.stringify(await read()) === JSON.stringify(['s3cret!', '']), 'auto-type starts with Shift+Tab (b -> a) and uses the inherited sequence: ' + JSON.stringify(await read()));
+await app.evaluate(async () => { await globalThis.__target.webContents.executeJavaScript('a.value="";b.value="";b.focus()'); globalThis.__target.focus(); });
 await page.evaluate((id) => kyuch.call('entry:update', { id, autoTypeSeq: '{USERNAME}{TAB}{PASSWORD}' }), id);
 await page.waitForTimeout(500);
 await page.evaluate((id) => kyuch.call('entry:autotype', { id }), id);       // entry override with a Tab between fields
 await page.waitForTimeout(500);
 ok(JSON.stringify(await read()) === JSON.stringify(['octo', 's3cret!']), 'entry sequence override + Tab moves between fields: ' + JSON.stringify(await read()));
-await app.close();
+await app.close(); mock.close();

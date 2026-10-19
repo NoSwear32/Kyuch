@@ -114,3 +114,24 @@ test('XML-hostile characters survive a save/load round trip', async () => {
   for (const k of ['title', 'username', 'password', 'url']) assert.equal(e[k], nasty, k);
   assert.equal(e.notes, nasty + '\nline2');
 });
+
+test('custom icons: add, assign, persist, unused ones are cleaned on save', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  const v = await Vault.create(tmp, 'master pw');
+  const used = v.addIcon(png, 'used'), unused = v.addIcon(png, 'unused');
+  const gid = v.addGroup(v.root.uuid.id, { name: 'G', customIcon: used });
+  const eid = v.addEntry(gid, { title: 'E', customIcon: used });
+  assert.throws(() => v.addEntry(gid, { title: 'bad', customIcon: 'nope' }));
+  await v.save();
+  const r = await Vault.open(tmp, 'master pw');
+  const t = r.tree(), g = t.groups.find((x) => x.name === 'G');
+  assert.equal(g.customIcon, used); assert.equal(g.entries[0].customIcon, used);
+  assert.ok(r.icons()[used].startsWith('data:image/png;base64,')); assert.equal(r.icons()[unused], undefined);
+  r.updateEntry(eid, { customIcon: null, icon: 7 });            // back to a standard icon
+  assert.equal(r.tree().groups.find((x) => x.name === 'G').entries[0].customIcon, null);
+  assert.equal(r.getEntry(eid).icon, 7);
+});
+
+test('auto-type shift+tab key', () => {
+  assert.deepEqual(keyEvents([{ key: 'shifttab' }], LAYOUTS.gb), ['42:1', '15:1', '15:0', '42:0']);
+});

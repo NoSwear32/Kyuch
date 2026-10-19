@@ -32,13 +32,16 @@ function show(dlg) {
 
 // ---------- theme: explicit data-theme wins, "system" follows the OS ----------
 const isDark = () => document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
-function applyTheme(theme) { if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; }
+const paintThemeBtn = () => { $('themeBtn').textContent = isDark() ? 'Light mode' : 'Dark mode'; };
+function applyTheme(theme) { if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; paintThemeBtn(); }
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeBtn);
 
 // ---------- state ----------
 function setState(s) {
   S = s;
   if (s) applyTheme(s.cfg.theme);
   $('lock').hidden = !!s; $('app').hidden = !s;
+  for (const id of ['tools', 'search', 'brand']) $(id).hidden = !s; // the title bar keeps only the window buttons while locked
   if (!s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
@@ -55,11 +58,13 @@ function setState(s) {
 }
 
 const pathOf = (id) => { const out = []; for (let g = groups.get(id); g?.parent; g = groups.get(g.parent.id)) out.unshift(g.g.name); return out.join(' / '); };
+// Icon for an entry/folder: the user's own image if one is set, otherwise the standard KeePass icon (emoji).
+const iconNode = (o, fallback) => (o.customIcon && S?.icons?.[o.customIcon] ? h('img', { class: 'ico', src: S.icons[o.customIcon], alt: '' }) : (ICONS[o.icon] ?? fallback));
 const yn = (v) => (v === true ? 'Yes' : v === false ? 'No' : v);
 
 // ---------- render ----------
 function render() {
-  $('btnSave').textContent = S.dirty ? '💾 Save •' : '💾 Save';
+  $('btnSave').textContent = S.dirty ? 'Save •' : 'Save';
   $('status').textContent = `${S.path} · KDBX${S.legacy ? 3 : 4} · ${entries.size} entries`;
   renderTree(); renderList(); renderDetail();
 }
@@ -76,7 +81,7 @@ function renderTree() {
       ondrop: (e) => { e.preventDefault(); row.classList.remove('drop'); move(e.dataTransfer.getData('text/plain'), g.id); },
     },
     h('span', { class: 'tw', onclick: (e) => { e.stopPropagation(); open ? expanded.delete(g.id) : expanded.add(g.id); renderTree(); } }, kids ? (open ? '▾' : '▸') : ''),
-    h('span', {}, ICONS[g.icon] || '📁'), h('span', {}, g.name));
+    h('span', {}, iconNode(g, '📁')), h('span', {}, g.name));
     return h('div', {}, row, kids && open ? h('div', { class: 'kids' }, g.groups.map((c) => node(c))) : null);
   };
   $('tree').replaceChildren(node(S.root, true));
@@ -95,9 +100,9 @@ function visibleEntries() {
 function renderList() {
   const cur = groups.get(selGroup).g, rows = visibleEntries();
   const bar = query ? h('div', { class: 'muted bar' }, `Search results: ${rows.length}`) : h('div', { class: 'row bar' },
-    h('strong', {}, `${ICONS[cur.icon] || '📁'} ${cur.name}`),
+    h('strong', {}, iconNode(cur, '📁'), ' ' + cur.name),
     h('span', { class: 'muted grow' }, cur.notes),
-    h('button', { onclick: () => editFolder(cur.id) }, '✎ Folder settings'),
+    h('button', { onclick: () => editFolder(cur.id) }, 'Folder settings'),
     cur.id === S.root.id || cur.isBin ? null : h('button', { class: 'danger', onclick: () => delFolder(cur) }, 'Delete'));
   const table = rows.length ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Title'), h('th', {}, 'Username'), h('th', {}, query ? 'Folder' : 'URL'))),
     h('tbody', {}, rows.map(({ e, g }) => h('tr', {
@@ -105,8 +110,8 @@ function renderList() {
       onclick: () => { selEntry = e.id; reveal = null; renderList(); renderDetail(); },
       ondblclick: () => editEntry(e.id),
       ondragstart: (ev) => ev.dataTransfer.setData('text/plain', e.id),
-    }, h('td', {}, `${ICONS[e.icon] || '🔑'} ${e.title}`), h('td', {}, e.username), h('td', {}, query ? pathOf(g.id) || g.name : e.url)))))
-    : h('div', { class: 'empty' }, query ? 'No matches' : 'No entries here. Use “＋ Entry”.');
+    }, h('td', {}, iconNode(e, '🔑'), ' ' + e.title), h('td', {}, e.username), h('td', {}, query ? pathOf(g.id) || g.name : e.url)))))
+    : h('div', { class: 'empty' }, query ? 'No matches' : 'No entries here. Use Add, then Entry.');
   $('list').replaceChildren(bar, table);
 }
 
@@ -117,7 +122,7 @@ function renderDetail() {
   const field = (label, text, ...btns) => h('div', { class: 'field' }, h('label', {}, label), h('div', { class: 'v' }, h('span', {}, text), btns));
   const pw = reveal?.id === e.id ? reveal.text : '••••••••';
   $('detail').replaceChildren(...[
-    h('h2', {}, ICONS[e.icon] || '🔑', e.title),
+    h('h2', {}, iconNode(e, '🔑'), e.title),
     h('div', { class: 'muted' }, pathOf(g.id) || g.name),
     field('Username', e.username, h('button', { onclick: () => copy(e.id, 'username') }, 'Copy')),
     field('Password', pw,
@@ -127,8 +132,8 @@ function renderDetail() {
     e.notes ? field('Comments', e.notes) : null,
     e.tags.length ? field('Tags', e.tags.join(', ')) : null,
     h('div', { class: 'actions' },
-      h('button', { class: 'primary', onclick: () => autoType(e.id) }, '⌨ Auto-type'),
-      h('button', { onclick: () => editEntry(e.id) }, '✎ Edit'),
+      h('button', { class: 'primary', onclick: () => autoType(e.id) }, 'Auto-type'),
+      h('button', { onclick: () => editEntry(e.id) }, 'Edit'),
       h('button', { class: 'danger', onclick: () => delEntry(e, g) }, 'Delete')),
   ].filter(Boolean));
 }
@@ -147,16 +152,28 @@ function delFolder(g) {
 }
 
 // ---------- icon picker ----------
-function pickIcon(current) {
-  const grid = $('iconGrid');
+// Resolves with {icon, customIcon}. Cancel, Esc and clicking outside all resolve with the unchanged value.
+function pickIcon(cur) {
   return new Promise((res) => {
     const dlg = $('iconDlg');
-    grid.replaceChildren(...ICONS.map((ic, i) => h('button', { type: 'button', class: i === current ? 'on' : '', title: `#${i}`, onclick: () => { res(i); dlg.close(); } }, ic)));
-    dlg.addEventListener('close', () => res(current), { once: true });
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; res(v); } dlg.close(); };
+    $('iconGrid').replaceChildren(...ICONS.map((ic, i) => h('button', { type: 'button', class: !cur.customIcon && cur.icon === i ? 'on' : '', title: `#${i}`, onclick: () => finish({ icon: i, customIcon: null }) }, ic)));
+    $('customGrid').replaceChildren(...Object.entries(S.icons || {}).map(([id, src]) =>
+      h('button', { type: 'button', class: cur.customIcon === id ? 'on' : '', onclick: () => finish({ icon: cur.icon, customIcon: id }) }, h('img', { class: 'ico', src, alt: '' }))));
+    $('iconAdd').onclick = () => act(async () => {
+      const s = await call('icon:add');
+      if (s) { setState(s); finish({ icon: cur.icon, customIcon: s.newIcon }); } // new icon is applied straight away
+    });
+    dlg.addEventListener('close', () => finish(cur), { once: true });
     dlg.showModal();
   });
 }
-const iconButton = (btn, get, set) => { btn.textContent = ICONS[get()]; btn.onclick = async () => { set(await pickIcon(get())); btn.textContent = ICONS[get()]; }; };
+const iconButton = (btn, get, set) => {
+  const paint = () => btn.replaceChildren(iconNode(get(), '🔑'));
+  paint();
+  btn.onclick = async () => { set(await pickIcon(get())); paint(); };
+};
 
 // ---------- entry dialog ----------
 // ---------- password generator dialog ----------
@@ -208,19 +225,19 @@ async function editEntry(id) {
   const base = id ? await act(() => call('entry:get', { id })) : { title: '', username: '', password: '', url: '', notes: '', icon: 0, tags: [], autoType: true, autoTypeSeq: '' };
   if (!base) return;
   const groupId = id ? entries.get(id).g.id : selGroup, g = groups.get(groupId).g;
-  let icon = base.icon;
+  let ico = { icon: base.icon, customIcon: base.customIcon ?? null };
   $('entryDlgTitle').textContent = id ? 'Edit entry' : 'New entry';
-  iconButton($('eIcon'), () => icon, (v) => (icon = v));
-  $('eTitle').value = base.title; $('eUser').value = base.username; $('ePass').value = base.password; $('ePass').type = 'password';
+  iconButton($('eIcon'), () => ico, (v) => (ico = v));
+  $('eTitle').value = base.title; $('eUser').value = base.username; $('ePass').value = base.password; $('ePass').type = 'password'; $('eShow').textContent = 'Show';
   $('eUrl').value = base.url; $('eNotes').value = base.notes; $('eTags').value = base.tags.join(', ');
   $('eAuto').checked = base.autoType; $('eSeq').value = base.autoTypeSeq;
   const inh = g.effective.autoTypeSeq;
   $('eSeq').placeholder = `Inherit: ${inh.value}${inh.from ? ` (from ${inh.from})` : ''}`;
-  $('eShow').onclick = () => ($('ePass').type = $('ePass').type === 'password' ? 'text' : 'password');
-  $('eGen').onclick = async () => { const pw = await openGenerator(true); if (pw) { $('ePass').value = pw; $('ePass').type = 'text'; } };
+  $('eShow').onclick = () => { const hidden = $('ePass').type === 'password'; $('ePass').type = hidden ? 'text' : 'password'; $('eShow').textContent = hidden ? 'Hide' : 'Show'; };
+  $('eGen').onclick = async () => { const pw = await openGenerator(true); if (pw) { $('ePass').value = pw; $('ePass').type = 'text'; $('eShow').textContent = 'Hide'; } };
   if (!(await show($('entryDlg')))) return;
   const p = {
-    title: $('eTitle').value, username: $('eUser').value, password: $('ePass').value, url: $('eUrl').value.trim(), notes: $('eNotes').value, icon,
+    title: $('eTitle').value, username: $('eUser').value, password: $('ePass').value, url: $('eUrl').value.trim(), notes: $('eNotes').value, icon: ico.icon, customIcon: ico.customIcon,
     tags: $('eTags').value.split(',').map((t) => t.trim()).filter(Boolean), autoType: $('eAuto').checked, autoTypeSeq: $('eSeq').value.trim(),
   };
   update(id ? 'entry:update' : 'entry:add', id ? { id, ...p } : { groupId, ...p });
@@ -237,9 +254,9 @@ function editFolder(id, parentId) {
     sel.replaceChildren(h('option', { value: '' }, label(k, yn)), h('option', { value: 'true' }, 'Yes'), h('option', { value: 'false' }, 'No'));
     sel.value = raw === null ? '' : String(raw);
   };
-  let icon = g ? g.icon : 48;
+  let ico = { icon: g ? g.icon : 48, customIcon: g?.customIcon ?? null };
   $('folderDlgTitle').textContent = g ? 'Folder settings' : 'New folder';
-  iconButton($('fIcon'), () => icon, (v) => (icon = v));
+  iconButton($('fIcon'), () => ico, (v) => (ico = v));
   $('fName').value = g ? g.name : ''; $('fNotes').value = g ? g.notes : '';
   tri($('sAuto'), 'autoType'); tri($('sSearch'), 'searching');
   for (const [el, k] of [[$('sSeq'), 'autoTypeSeq'], [$('sClip'), 'clipboardClear'], [$('sDelay'), 'typeDelay']]) {
@@ -252,7 +269,7 @@ function editFolder(id, parentId) {
     const tv = (el) => (el.value === '' ? null : el.value === 'true');
     const settings = { autoType: tv($('sAuto')), searching: tv($('sSearch')), autoTypeSeq: $('sSeq').value.trim() };
     if (!S.legacy) Object.assign(settings, { clipboardClear: num($('sClip')), typeDelay: num($('sDelay')) });
-    const p = { name: $('fName').value, notes: $('fNotes').value, icon, settings };
+    const p = { name: $('fName').value, notes: $('fNotes').value, icon: ico.icon, customIcon: ico.customIcon, settings };
     if (g) update('group:update', { id: g.id, ...p }); else { expanded.add(parentId); update('group:add', { parentId, ...p }); }
   });
 }
@@ -275,7 +292,7 @@ let unlockPath = null;
 async function showRecent() {
   unlockPath = null; $('unlockForm').hidden = true; $('lockErr').textContent = '';
   const cfg = await call('cfg:get');
-  $('recent').replaceChildren(...cfg.recent.map((p) => h('button', { onclick: () => pickUnlock(p) }, '📂 ' + p)));
+  $('recent').replaceChildren(...cfg.recent.map((p) => h('button', { onclick: () => pickUnlock(p) }, p)));
 }
 function pickUnlock(p) {
   unlockPath = p; $('unlockPath').textContent = p; $('unlockForm').hidden = false; $('unlockPw').value = ''; $('unlockPw').focus();
@@ -311,8 +328,58 @@ $('themeBtn').onclick = () => act(async () => {
 });
 $('btnSave').onclick = () => update('db:save');
 $('btnSettings').onclick = appSettings;
-$('btnEntry').onclick = () => editEntry(null);
-$('btnFolder').onclick = () => editFolder(null, selGroup);
+
+// ---------- Add menu ----------
+const closeAdd = () => { $('addMenu').hidden = true; $('btnAdd').setAttribute('aria-expanded', 'false'); };
+$('btnAdd').onclick = (e) => { e.stopPropagation(); $('addMenu').hidden = !$('addMenu').hidden; $('btnAdd').setAttribute('aria-expanded', String(!$('addMenu').hidden)); };
+$('addEntry').onclick = () => { closeAdd(); editEntry(null); };
+$('addFolder').onclick = () => { closeAdd(); editFolder(null, selGroup); };
+document.addEventListener('click', closeAdd);
+document.addEventListener('keydown', (e) => e.key === 'Escape' && closeAdd());
+
+// ---------- window controls (frameless window) ----------
+$('wMin').onclick = () => call('win:minimize');
+$('wMax').onclick = () => call('win:toggleMax');
+$('wClose').onclick = () => call('win:close');
+kyuch.onWindowState((max) => { $('wMax').title = max ? 'Restore' : 'Maximize'; $('wMax').querySelector('.max').hidden = max; $('wMax').querySelector('.rest').hidden = !max; });
+$('top').addEventListener('dblclick', (e) => { if (!e.target.closest('button,input')) call('win:toggleMax'); });
+
+// ---------- About + updates ----------
+let aboutInfo = null;
+async function openAbout() {
+  aboutInfo = await call('app:info');
+  $('aboutVersion').textContent = 'Version ' + aboutInfo.version;
+  $('updStatus').textContent = ''; $('updNotes').hidden = true;
+  for (const id of ['updInstall', 'updRestart']) $(id).hidden = true;
+  $('updCheck').disabled = false;
+  $('aboutDlg').showModal();
+}
+$('btnAbout').onclick = () => act(openAbout);
+$('updCheck').onclick = async () => {
+  const status = $('updStatus');
+  status.textContent = 'Checking…'; $('updCheck').disabled = true; $('updInstall').hidden = true; $('updNotes').hidden = true;
+  try {
+    const u = await call('update:check');
+    if (!u.newer) status.textContent = `You are up to date (version ${u.current}).`;
+    else {
+      status.textContent = `Version ${u.latest} is available.`;
+      $('updNotes').textContent = u.notes.slice(0, 1500); $('updNotes').hidden = !u.notes;
+      $('updInstall').textContent = aboutInfo.canInstall ? 'Download and install' : 'Download and verify'; $('updInstall').hidden = false;
+    }
+  } catch (e) { status.textContent = 'Could not check for updates: ' + e.message; }
+  $('updCheck').disabled = false;
+};
+$('updInstall').onclick = async () => {
+  const status = $('updStatus');
+  $('updInstall').disabled = true; status.textContent = 'Downloading and checking the signature…';
+  try {
+    const r = await call('update:install');
+    if (r.installed) { status.textContent = 'Installed. Restart Kyuch to finish the update.'; $('updInstall').hidden = true; $('updRestart').hidden = false; }
+    else status.textContent = `Downloaded and signature verified (${r.file}). This development build does not install packages.`;
+  } catch (e) { status.textContent = 'Update failed: ' + e.message; }
+  $('updInstall').disabled = false;
+};
+$('updRestart').onclick = () => act(() => call('app:relaunch'));
 $('search').oninput = (e) => { query = e.target.value.trim(); selEntry = null; render(); };
 
 document.addEventListener('keydown', (e) => {
@@ -321,6 +388,7 @@ document.addEventListener('keydown', (e) => {
   if (ctrl && k === 's') { e.preventDefault(); update('db:save'); }
   else if (ctrl && k === 'f') { e.preventDefault(); $('search').focus(); }
   else if (ctrl && k === 'l') { e.preventDefault(); lock(); }
+  else if (ctrl && k === 'n') { e.preventDefault(); e.shiftKey ? editFolder(null, selGroup) : editEntry(null); }
   else if (selEntry && ctrl && k === 'b') { e.preventDefault(); copy(selEntry, 'username'); }
   else if (selEntry && ctrl && k === 'u') { e.preventDefault(); act(() => call('entry:open', { id: selEntry })); }
   else if (selEntry && ctrl && e.shiftKey && k === 'v') { e.preventDefault(); autoType(selEntry); }

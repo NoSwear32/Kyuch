@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const kdbxweb = require('kdbxweb');
 const { argon2d, argon2id } = require('hash-wasm');
-const { ProtectedValue } = kdbxweb;
+const { ProtectedValue, KdbxUuid } = kdbxweb;
 
 // Electron's BoringSSL has no crypto.argon2, so use WASM (memory is in KiB for both APIs).
 kdbxweb.CryptoEngine.setArgon2Impl(async (pw, salt, memory, iterations, hashLength, parallelism, type, version) => {
@@ -84,6 +84,7 @@ class Vault {
   upgrade() { this.db.upgrade(); hardenKdf(this.db); this.dirty = true; }
 
   async save(path = this.path) {
+    this.db.cleanup({ customIcons: true }); // drop uploaded icons nothing uses any more
     const data = Buffer.from(await this.db.save());
     const tmp = path + '.tmp';
     fs.writeFileSync(tmp, data, { mode: 0o600 });
@@ -96,6 +97,24 @@ class Vault {
     await this.db.credentials.setPassword(ProtectedValue.fromString(password));
     this.db.meta.masterKeyChanged = new Date();
     this.dirty = true;
+  }
+
+  // ---- custom icons (stored in the database, so other KeePass apps show them too) ----
+  addIcon(png, name = 'icon') {
+    const id = KdbxUuid.random();
+    const data = png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength);
+    this.db.meta.customIcons.set(id.id, { data, name, lastModified: new Date() });
+    this.dirty = true;
+    return id.id;
+  }
+  icons() {
+    return Object.fromEntries([...this.db.meta.customIcons].map(([id, i]) => [id, 'data:image/png;base64,' + Buffer.from(i.data).toString('base64')]));
+  }
+  _setIcon(item, p) {
+    if (p.icon !== undefined) item.icon = p.icon;
+    if (p.customIcon === undefined) return;
+    if (p.customIcon && !this.db.meta.customIcons.has(p.customIcon)) throw new Error('Icon not found');
+    item.customIcon = p.customIcon ? new KdbxUuid(p.customIcon) : undefined;
   }
 
   // ---- lookup ----
@@ -114,12 +133,12 @@ class Vault {
     const walk = (g) => {
       const eff = resolveAll(g);
       return {
-        id: g.uuid.id, name: g.name, icon: g.icon ?? 48, notes: g.notes || '', isBin: g === bin,
+        id: g.uuid.id, name: g.name, icon: g.icon ?? 48, customIcon: g.customIcon?.id ?? null, notes: g.notes || '', isBin: g === bin,
         raw: Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, rawSetting(g, k)])),
         effective: eff,
         entries: g.entries.map((e) => ({
           id: e.uuid.id, title: str(e.fields.get('Title')), username: str(e.fields.get('UserName')),
-          url: str(e.fields.get('URL')), notes: str(e.fields.get('Notes')), icon: e.icon ?? 0,
+          url: str(e.fields.get('URL')), notes: str(e.fields.get('Notes')), icon: e.icon ?? 0, customIcon: e.customIcon?.id ?? null,
           tags: e.tags, searchable: eff.searching.value,
           autoType: e.autoType.enabled, autoTypeSeq: e.autoType.defaultSequence || '',
         })),
@@ -130,19 +149,19 @@ class Vault {
   }
 
   // ---- folders ----
-  addGroup(parentId, { name, icon, notes, settings }) {
+  addGroup(parentId, { name, icon, customIcon, notes, settings }) {
     const g = this.db.createGroup(this.group(parentId), name || 'New folder');
-    if (icon !== undefined) g.icon = icon;
+    this._setIcon(g, { icon, customIcon });
     g.notes = notes || '';
     writeSettings(g, settings || {});
     this.dirty = true;
     return g.uuid.id;
   }
 
-  updateGroup(id, { name, icon, notes, settings }) {
+  updateGroup(id, { name, icon, customIcon, notes, settings }) {
     const g = this.group(id);
     if (name !== undefined) g.name = name;
-    if (icon !== undefined) g.icon = icon;
+    this._setIcon(g, { icon, customIcon });
     if (notes !== undefined) g.notes = notes;
     if (settings) writeSettings(g, settings);
     g.times.update();
@@ -183,7 +202,7 @@ class Vault {
     const set = { title: 'Title', username: 'UserName', url: 'URL', notes: 'Notes' };
     for (const [k, f] of Object.entries(set)) if (p[k] !== undefined) e.fields.set(f, p[k]);
     if (p.password !== undefined) e.fields.set('Password', ProtectedValue.fromString(p.password));
-    if (p.icon !== undefined) e.icon = p.icon;
+    this._setIcon(e, p);
     if (p.tags !== undefined) e.tags = p.tags;
     if (p.autoType !== undefined) e.autoType.enabled = !!p.autoType;
     if (p.autoTypeSeq !== undefined) e.autoType.defaultSequence = p.autoTypeSeq || undefined;
@@ -196,7 +215,7 @@ class Vault {
   getEntry(id) {
     const e = this.entry(id);
     return { id, title: str(e.fields.get('Title')), username: str(e.fields.get('UserName')), password: str(e.fields.get('Password')),
-      url: str(e.fields.get('URL')), notes: str(e.fields.get('Notes')), icon: e.icon ?? 0, tags: e.tags,
+      url: str(e.fields.get('URL')), notes: str(e.fields.get('Notes')), icon: e.icon ?? 0, customIcon: e.customIcon?.id ?? null, tags: e.tags,
       autoType: e.autoType.enabled, autoTypeSeq: e.autoType.defaultSequence || '' };
   }
 
