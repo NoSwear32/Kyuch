@@ -158,3 +158,170 @@ test('one-time password: stored as KeePassXC-style otp field, survives save/load
   r.updateEntry(id, { otp: '' });                                             // remove it again
   assert.equal(r.otpInfo(id), null); assert.equal(r.getEntry(id).otp, '');
 });
+
+test('auto-type helpers: Windows payload and the Linux helper protocol (no keystrokes are sent)', () => {
+  const { winOps, winPayload } = require('../autotype');
+  const actions = [{ key: 'alttab' }, { delay: 500 }, { text: 'pä$$wörd €\u{1f511}' }, { key: 'tab' }, { text: 'x' }, { key: 'enter' }];
+  assert.deepEqual(winOps(actions), [{ t: 'key', v: 'alttab' }, { t: 'sleep', ms: 500 }, { t: 'text', v: 'pä$$wörd €\u{1f511}' }, { t: 'key', v: 'tab' }, { t: 'text', v: 'x' }, { t: 'key', v: 'enter' }]);
+  const job = JSON.parse(Buffer.from(winPayload(actions, 12), 'base64').toString('utf8'));
+  assert.equal(job.delay, 12); assert.equal(job.ops[2].v, 'pä$$wörd €\u{1f511}');           // unicode survives the base64/JSON trip
+  assert.match(winPayload(actions, 12), /^[A-Za-z0-9+/=]+$/);                                // pure ASCII on the wire, no code-page problems
+  // the Linux helper must parse its stdin protocol and refuse anything malformed
+  const { spawnSync } = require('node:child_process');
+  const py = (input) => spawnSync('python3', ['-c', `import sys; sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..'))}); import uinput_type as u; print(u.parse(sys.stdin.read()))`], { input, encoding: 'utf8' });
+  assert.equal(py('12\n42:1\n15:1\n15:0\n42:0\nsleep:500\n').status, 0);
+  for (const bad of ['', 'x', '12\n999:1', '12\n5:2', '5000\n', '12\nsleep:99999999']) assert.notEqual(py(bad).status, 0, 'must reject ' + JSON.stringify(bad));
+});
+
+test('hostile KDF settings are refused instead of hanging the app', async () => {
+  const kdbxweb = require('kdbxweb');
+  const args = (memKiB, passes) => [Buffer.from('pw'), Buffer.alloc(32), memKiB, passes, 32, 2, 0, 0x13];
+  await assert.rejects(kdbxweb.CryptoEngine.argon2(...args(64 * 1024 * 1024, 2)), /unreasonably heavy/);        // 64 GiB
+  await assert.rejects(kdbxweb.CryptoEngine.argon2(...args(64 * 1024, 4_000_000_000)), /unreasonably heavy/);   // billions of passes
+  assert.equal((await kdbxweb.CryptoEngine.argon2(...args(64 * 1024, 3))).byteLength, 32);                       // Kyuch's own settings still work
+});
+
+test('save: no temp file left behind, replaces an existing database, retries a busy rename', async () => {
+  const fsx = require('node:fs');
+  const dir = fsx.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'kyuch-save-'));
+  const file = path.join(dir, 'a.kdbx');
+  const v = await Vault.create(file, 'pw');
+  v.addEntry(v.root.uuid.id, { title: 'second save' });
+  await v.save();                                                        // replaces the file made by create()
+  assert.deepEqual(fsx.readdirSync(dir), ['a.kdbx'], 'no .tmp left');
+  assert.equal((await Vault.open(file, 'pw')).tree().entries.length, 1);
+  // a rename that fails twice with EPERM (antivirus holding the file) and then works must succeed
+  const real = fsx.renameSync; let calls = 0;
+  fsx.renameSync = (a, b) => { if (++calls <= 2) { const e = new Error('busy'); e.code = 'EPERM'; throw e; } return real(a, b); };
+  try { await v.save(); } finally { fsx.renameSync = real; }
+  assert.equal(calls, 3); assert.deepEqual(fsx.readdirSync(dir), ['a.kdbx']);
+  // a rename that never works must fail loudly and still clean up
+  fsx.renameSync = () => { const e = new Error('locked'); e.code = 'EBUSY'; throw e; };
+  try { await assert.rejects(v.save(), /locked/); } finally { fsx.renameSync = real; }
+  assert.deepEqual(fsx.readdirSync(dir), ['a.kdbx'], 'tmp cleaned after failure');
+  fsx.rmSync(dir, { recursive: true, force: true });
+});
+
+test('recycle bin: delete moves in, deleting from the bin is permanent, a disabled bin means permanent', async () => {
+  const v = await Vault.create(tmp, 'master pw');
+  const root = v.root.uuid.id;
+  const e = v.addEntry(root, { title: 'x' }), g = v.addGroup(root, { name: 'G' }), inner = v.addEntry(g, { title: 'inner' });
+  v.deleteEntry(e); v.deleteGroup(g);
+  let bin = v.tree().groups.find((x) => x.isBin);
+  assert.equal(bin.entries.length, 1); assert.equal(bin.groups.length, 1);              // both are in the bin now
+  v.deleteEntry(e); v.deleteGroup(g);                                                    // delete again FROM the bin
+  bin = v.tree().groups.find((x) => x.isBin);
+  assert.equal(bin.entries.length, 0); assert.equal(bin.groups.length, 0, 'gone for good');
+  assert.throws(() => v.entry(inner), /not found/);                                       // its contents went with the folder
+  await v.save(); const r = await Vault.open(tmp, 'master pw');
+  assert.equal(r.tree().groups.find((x) => x.isBin).entries.length, 0); assert.equal(r.tree().groups.length, 1);
+  // a database from another app with the bin turned off: delete really deletes, and the UI is told
+  r.db.meta.recycleBinEnabled = false;
+  assert.equal(r.binEnabled, false);
+  const e2 = r.addEntry(r.root.uuid.id, { title: 'y' }); r.deleteEntry(e2);
+  assert.equal(r.tree().entries.length, 0);
+  assert.equal(r.tree().groups.some((x) => x.isBin), false);
+});
+
+test('dirty stays true when an edit lands while a save is in flight', async () => {
+  const v = await Vault.create(tmp, 'master pw');
+  assert.equal(v.dirty, false);
+  v.addEntry(v.root.uuid.id, { title: 'first' }); assert.equal(v.dirty, true);
+  const saving = v.save();
+  await new Promise((r) => setImmediate(r));                                              // the save is now running (encrypting/deriving the key)
+  v.addEntry(v.root.uuid.id, { title: 'made during the save' });                         // not in the file being written
+  await saving;
+  assert.equal(v.dirty, true, 'the later edit is still unsaved');
+  await v.save(); assert.equal(v.dirty, false);
+});
+
+test('unchanged edits add no history; changed ones do; empty folder names fall back', async () => {
+  const v = await Vault.create(tmp, 'master pw');
+  const id = v.addEntry(v.root.uuid.id, { title: 'a', username: 'u', password: 'p', tags: ['t'], icon: 3 });
+  await v.save();
+  v.updateEntry(id, { title: 'a', username: 'u', password: 'p', tags: ['t'], icon: 3, customIcon: null, autoType: true });
+  assert.equal(v.dirty, false); assert.equal(v.entry(id).history.length, 0);
+  v.updateEntry(id, { password: 'p2' });
+  assert.equal(v.dirty, true); assert.equal(v.entry(id).history.length, 1);
+  const g = v.addGroup(v.root.uuid.id, { name: 'G' }); v.updateGroup(g, { name: '' });
+  assert.equal(v.tree().groups.find((x) => x.id === g).name, 'New folder');
+});
+
+test('settings from a hostile database are bounded and never NaN', async () => {
+  const v = await Vault.create(tmp, 'master pw');
+  const g = v.addGroup(v.root.uuid.id, { name: 'G', settings: { clipboardClear: 99999999999, typeDelay: 99999 } });
+  const n = () => v.tree().groups.find((x) => x.id === g);
+  assert.equal(n().effective.clipboardClear.value, 86_400); assert.equal(n().effective.typeDelay.value, 1000);
+  v.db.getGroup(g).customData.set('kyuch.clipboardClear', { value: 'abc' });             // as if a hostile file said so
+  assert.equal(n().effective.clipboardClear.value, 12, 'garbage = inherit the default, never NaN');
+  v.updateGroup(g, { settings: { clipboardClear: 'abc' } });
+  assert.equal(n().raw.clipboardClear, null);
+});
+
+test('save: a symlinked vault keeps its link, a planted tmp symlink is not followed, copy mode does not switch files', async () => {
+  const fsx = require('node:fs');
+  const dir = fsx.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'kyuch-link-'));
+  const real = path.join(dir, 'real.kdbx'), link = path.join(dir, 'link.kdbx'), victim = path.join(dir, 'victim.txt');
+  const v = await Vault.create(real, 'pw'); fsx.symlinkSync(real, link);
+  v.path = link; v.addEntry(v.root.uuid.id, { title: 'via link' }); await v.save();
+  assert.ok(fsx.lstatSync(link).isSymbolicLink(), 'the link survived'); assert.equal((await Vault.open(real, 'pw')).tree().entries.length, 1);
+  fsx.writeFileSync(victim, 'precious'); fsx.symlinkSync(victim, real + '.tmp');          // attacker pre-plants real.kdbx.tmp -> victim
+  v.addEntry(v.root.uuid.id, { title: 'again' }); await v.save();
+  assert.equal(fsx.readFileSync(victim, 'utf8'), 'precious', 'the planted symlink was not written through');
+  const copy = path.join(dir, 'backup.kdbx'); v.addEntry(v.root.uuid.id, { title: 'unsaved' });
+  await v.save(copy, { copy: true });
+  assert.equal(v.path, link); assert.equal(v.dirty, true, 'a copy does not count as saving the real file');
+  assert.equal((await Vault.open(copy, 'pw')).tree().entries.length, 3);
+  fsx.rmSync(dir, { recursive: true, force: true });
+});
+
+test('hardening fixes: delay cap, TOTP key length/steam/label, generator length and emoji, version compare', () => {
+  const { parse: p } = require('../autotype'), totp = require('../totp'), Gen = require('../renderer/gen.js'), { compare } = require('../updater');
+  assert.deepEqual(p('{DELAY 99999999999}', {}), [{ delay: 10_000 }]);
+  assert.throws(() => totp.parse('A'), /too short/); assert.throws(() => totp.parse('JBSWY3DPEHPK3PXP'.slice(0, 8)), /too short/);
+  assert.throws(() => totp.parse('otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam'), /Steam/);
+  assert.equal(totp.parse('otpauth://totp/100%zz?secret=JBSWY3DPEHPK3PXP').digits, 6);       // a stray % in the label is tolerated
+  assert.equal(Gen.generate({ length: 100_000_000, lower: true }).length, 1024);
+  const emoji = Gen.generate({ length: 200, symbols: true, symbolSet: '\u{1f511}\u{1f510}' });
+  assert.ok(/^[\u{1f511}\u{1f510}]+$/u.test(emoji) && [...emoji].length === 200, 'whole emoji only, no lone surrogates');
+  assert.ok(compare('1.2.3-beta', '1.2.3') < 0 && compare('1.2.3', '1.2.3-beta') > 0 && compare('1.2.4-beta', '1.2.3') > 0 && compare('1.2.3', '1.2.3') === 0);
+});
+
+test('key derivation runs off the main thread: the event loop keeps ticking during a heavy derivation', async () => {
+  const kdbxweb = require('kdbxweb');
+  let ticks = 0; const iv = setInterval(() => ticks++, 10);
+  const t0 = Date.now();
+  await kdbxweb.CryptoEngine.argon2(Buffer.from('pw'), Buffer.alloc(32), 256 * 1024, 4, 32, 2, 0, 0x13); // 256 MiB x 4
+  clearInterval(iv);
+  const ms = Date.now() - t0;
+  assert.ok(ticks > ms / 10 / 3, `the loop kept ticking (${ticks} ticks in ${ms} ms)`);
+});
+
+test('autotype-access script: enable writes the udev rule, disable removes it, anything else is refused', () => {
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'kyuch-acc-'));
+  const rule = path.join(dir, '60-kyuch-uinput.rules'), script = path.join(__dirname, '../scripts/autotype-access.sh');
+  const run = (arg) => spawnSync('sh', [script, ...(arg ? [arg] : [])], { env: { ...process.env, KYUCH_RULE_FILE: rule }, encoding: 'utf8' });
+  assert.notEqual(run().status, 0); assert.notEqual(run('nonsense').status, 0); assert.ok(!fs.existsSync(rule));
+  assert.equal(run('enable').status, 0);
+  assert.equal(fs.readFileSync(rule, 'utf8'), 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"\n');
+  assert.equal(fs.statSync(rule).mode & 0o777, 0o644); assert.ok(!fs.existsSync(rule + '.tmp'));
+  assert.equal(run('disable').status, 0); assert.ok(!fs.existsSync(rule));
+  assert.equal(run('disable').status, 0, 'disabling twice is fine');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('concurrent saves are serialized: all succeed, nothing is left over, the last edit is on disk', async () => {
+  const fsx = require('node:fs');
+  const dir = fsx.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'kyuch-conc-'));
+  const file = path.join(dir, 'c.kdbx');
+  const v = await Vault.create(file, 'pw');
+  v.addEntry(v.root.uuid.id, { title: 'one' });
+  const a = v.save(); v.addEntry(v.root.uuid.id, { title: 'two' });
+  const b = v.save(), c = v.save();
+  await Promise.all([a, b, c]);
+  assert.deepEqual(fsx.readdirSync(dir), ['c.kdbx']);
+  assert.equal((await Vault.open(file, 'pw')).tree().entries.length, 2);
+  assert.equal(v.dirty, false);
+  fsx.rmSync(dir, { recursive: true, force: true });
+});

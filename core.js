@@ -6,24 +6,52 @@ const { argon2d, argon2id } = require('hash-wasm');
 const totp = require('./totp');
 const { ProtectedValue, KdbxUuid } = kdbxweb;
 
+const MAX_KDF_MEMORY_KIB = 1024 * 1024;      // 1 GiB
+const MAX_KDF_WORK = 20_480;                  // MiB x passes (1 GiB x 20): tens of seconds at the very most
+const MAX_KDF_LANES = 16;
+
+const KDF_TIMEOUT_MS = 120_000;
+const { Worker } = require('node:worker_threads');
+
+// Runs the derivation in a worker thread that we can kill; falls back to the main thread only if a worker cannot even start.
+function argon2Job(job) {
+  return new Promise((resolve, reject) => {
+    let w;
+    try { w = new Worker(require('node:path').join(__dirname, 'argon2-worker.js'), { workerData: job }); } catch {
+      const hash = job.type === 2 ? argon2id : argon2d;
+      return hash({ password: job.password, salt: job.salt, parallelism: job.parallelism, iterations: job.iterations, memorySize: job.memory, hashLength: job.hashLength, outputType: 'binary' }).then(resolve, reject);
+    }
+    const timer = setTimeout(() => { w.terminate(); reject(new Error('Opening this database takes unusually long (heavy key derivation settings), so Kyuch stopped it')); }, KDF_TIMEOUT_MS);
+    w.once('message', (m) => { clearTimeout(timer); w.terminate(); m.ok ? resolve(m.hash) : reject(new Error(m.error)); });
+    w.once('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
 // Electron's BoringSSL has no crypto.argon2, so use WASM (memory is in KiB for both APIs).
 kdbxweb.CryptoEngine.setArgon2Impl(async (pw, salt, memory, iterations, hashLength, parallelism, type, version) => {
   if (version !== 0x13) throw new Error('Argon2 v1.0 databases are not supported');
-  const hash = type === 2 ? argon2id : argon2d;
-  const out = await hash({ password: new Uint8Array(pw), salt: new Uint8Array(salt), parallelism, iterations, memorySize: memory, hashLength, outputType: 'binary' });
+  // A hostile database can declare absurd key-derivation costs (hundreds of GB, billions of passes) just to hang or crash the app on open.
+  // Legitimate settings sit far below these limits (Kyuch itself uses 64 MiB x 3).
+  if (memory > MAX_KDF_MEMORY_KIB || parallelism > MAX_KDF_LANES || (memory / 1024) * iterations > MAX_KDF_WORK) {
+    throw new Error('This database asks for unreasonably heavy key derivation settings, so Kyuch will not open it');
+  }
+  const out = await argon2Job({ password: new Uint8Array(pw), salt: new Uint8Array(salt), memory, iterations, hashLength, parallelism, type });
   return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
 });
 
 // Final fallback when no folder up the chain sets a value.
 const DEFAULTS = { autoType: true, searching: true, autoTypeSeq: '{USERNAME}{TAB}{PASSWORD}{ENTER}', clipboardClear: 12, typeDelay: 12 };
 const NUM_KEYS = ['clipboardClear', 'typeDelay']; // stored in group customData (KDBX4 only)
+const LIMITS = { clipboardClear: 86_400, typeDelay: 1000 }; // seconds / milliseconds; also what timers and the typing helper accept
 
 const rawSetting = (g, key) => {
   if (key === 'autoType') return g.enableAutoType ?? null;
   if (key === 'searching') return g.enableSearching ?? null;
   if (key === 'autoTypeSeq') return g.defaultAutoTypeSeq || null;
   const v = (g.customData?.get('kyuch.' + key) ?? g.customData?.get('keeper.' + key))?.value; // keeper.* = pre-rename databases
-  return v === undefined || v === '' ? null : Number(v);
+  if (v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(n, LIMITS[key]) : null; // NaN/garbage = not set, so the value is inherited
 };
 
 // Walk up from the folder; first folder that sets the key wins.
@@ -45,8 +73,9 @@ function writeSettings(g, s) {
     if (!(k in s)) continue;
     g.customData ??= new Map();
     g.customData.delete('keeper.' + k);
-    if (s[k] === null || s[k] === '' || s[k] === undefined) g.customData.delete('kyuch.' + k);
-    else g.customData.set('kyuch.' + k, { value: String(Math.max(0, Math.round(Number(s[k])))) });
+    const n = Number(s[k]);
+    if (s[k] === null || s[k] === '' || s[k] === undefined || !Number.isFinite(n)) g.customData.delete('kyuch.' + k);
+    else g.customData.set('kyuch.' + k, { value: String(Math.min(LIMITS[k], Math.max(0, Math.round(n)))) });
   }
 }
 
@@ -59,10 +88,24 @@ function hardenKdf(db) {
   p.set('P', T.UInt32, 2);
 }
 
+// Windows antivirus / sync clients often hold a file open for a moment, which makes the replacing rename fail with EPERM/EBUSY: retry briefly.
+async function renameReplacing(from, to, tries = 6) {
+  for (let i = 0; ; i++) {
+    try { return fs.renameSync(from, to); } catch (e) {
+      if (i >= tries - 1 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+      await new Promise((r) => setTimeout(r, 80 * (i + 1)));
+    }
+  }
+}
+
 const str = (v) => (v instanceof ProtectedValue ? v.getText() : v || '');
 
 class Vault {
-  constructor(db, path) { this.db = db; this.path = path; this.dirty = false; }
+  constructor(db, path) { this.db = db; this.path = path; this.rev = 0; this.savedRev = 0; }
+
+  // `dirty` = changed since the last save STARTED. An edit made while a save is in flight bumps rev, so it still counts as unsaved afterwards.
+  get dirty() { return this.rev !== this.savedRev; }
+  touch() { this.rev++; }
 
   static async create(path, password, name = 'Kyuch') {
     const db = kdbxweb.Kdbx.create(new kdbxweb.Credentials(ProtectedValue.fromString(password)), name);
@@ -82,22 +125,39 @@ class Vault {
   }
 
   get legacy() { return this.db.versionMajor < 4; }
-  upgrade() { this.db.upgrade(); hardenKdf(this.db); this.dirty = true; }
+  upgrade() { this.db.upgrade(); hardenKdf(this.db); this.touch(); }
 
-  async save(path = this.path) {
-    this.db.cleanup({ customIcons: true }); // drop uploaded icons nothing uses any more
+  // opts.copy: write a backup elsewhere without switching this vault to it or clearing its unsaved state.
+  // Saves run one after another: two at once (Ctrl+S twice, or auto-lock during a save) would fight over the temp file.
+  save(path, opts) {
+    const run = () => this._save(path, opts);
+    this._saves = (this._saves ?? Promise.resolve()).then(run, run);
+    return this._saves;
+  }
+
+  async _save(path = this.path, { copy = false } = {}) {
+    const rev = this.rev;
+    this.db.cleanup({ customIcons: true, historyRules: true }); // drop unused uploaded icons, trim history to the database's limits
     const data = Buffer.from(await this.db.save());
-    const tmp = path + '.tmp';
-    fs.writeFileSync(tmp, data, { mode: 0o600 });
-    fs.renameSync(tmp, path); // atomic: a crash mid-write can't corrupt the existing file
-    this.path = path;
-    this.dirty = false;
+    let target = path;
+    try { target = fs.realpathSync(path); } catch { /* new file */ } // a vault that is a symlink (sync folders): replace what it points to, not the link
+    const tmp = target + '.tmp';
+    try {
+      fs.rmSync(tmp, { force: true });                  // never write through a pre-planted symlink at the temp name...
+      const fd = fs.openSync(tmp, 'wx', 0o600);          // ...and fail if something sneaks in between (O_EXCL)
+      try { fs.writeSync(fd, data); fs.fsyncSync(fd); } finally { fs.closeSync(fd); } // on disk before the rename, so a power cut cannot leave a truncated database
+      await renameReplacing(tmp, target); // atomic: a crash mid-write can't corrupt the existing file
+    } catch (e) {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+      throw e;
+    }
+    if (!copy) { this.path = path; this.savedRev = rev; }
   }
 
   async changePassword(password) {
     await this.db.credentials.setPassword(ProtectedValue.fromString(password));
     this.db.meta.masterKeyChanged = new Date();
-    this.dirty = true;
+    this.touch();
   }
 
   // ---- custom icons (stored in the database, so other KeePass apps show them too) ----
@@ -105,11 +165,12 @@ class Vault {
     const id = KdbxUuid.random();
     const data = png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength);
     this.db.meta.customIcons.set(id.id, { data, name, lastModified: new Date() });
-    this.dirty = true;
+    this.touch();
     return id.id;
   }
   icons() {
-    return Object.fromEntries([...this.db.meta.customIcons].map(([id, i]) => [id, 'data:image/png;base64,' + Buffer.from(i.data).toString('base64')]));
+    return Object.fromEntries([...this.db.meta.customIcons].filter(([, i]) => i.data.byteLength <= 256 * 1024) // ours are ~64 px; a huge one is not an icon
+      .map(([id, i]) => [id, 'data:image/png;base64,' + Buffer.from(i.data).toString('base64')]));
   }
   _setIcon(item, p) {
     if (p.icon !== undefined) item.icon = p.icon;
@@ -120,7 +181,8 @@ class Vault {
 
   // ---- lookup ----
   get root() { return this.db.getDefaultGroup(); }
-  get bin() { return this.db.meta.recycleBinUuid && this.db.getGroup(this.db.meta.recycleBinUuid); }
+  get binEnabled() { return !!(this.db.meta.recycleBinEnabled && this.db.meta.recycleBinUuid); } // databases from other apps may have it switched off
+  get bin() { return this.binEnabled ? this.db.getGroup(this.db.meta.recycleBinUuid) : null; }
   group(id) { const g = this.db.getGroup(id); if (!g) throw new Error('Folder not found'); return g; }
   entry(id) {
     for (const e of this.root.allEntries()) if (e.uuid.id === id) return e;
@@ -155,25 +217,32 @@ class Vault {
     this._setIcon(g, { icon, customIcon });
     g.notes = notes || '';
     writeSettings(g, settings || {});
-    this.dirty = true;
+    this.touch();
     return g.uuid.id;
   }
 
   updateGroup(id, { name, icon, customIcon, notes, settings }) {
     const g = this.group(id);
-    if (name !== undefined) g.name = name;
+    if (name !== undefined) g.name = name || 'New folder'; // an empty name would leave an unlabelled, hard-to-click row
     this._setIcon(g, { icon, customIcon });
     if (notes !== undefined) g.notes = notes;
     if (settings) writeSettings(g, settings);
     g.times.update();
-    this.dirty = true;
+    this.touch();
   }
 
   deleteGroup(id) {
     const g = this.group(id);
     if (g === this.root || g === this.bin) throw new Error('This folder cannot be deleted');
-    this.db.remove(g); // moves to recycle bin; deleting from the bin is permanent
-    this.dirty = true;
+    this.remove(g);
+    this.touch();
+  }
+
+  // Into the bin normally; for something already in the bin (or with no bin) it is gone for good. kdbxweb's remove() would just
+  // leave an item that is already in the bin where it is, so permanent deletion has to be an explicit move to nowhere.
+  remove(item) {
+    if (this.inBin(item) || !this.binEnabled) this.db.move(item, null); else this.db.remove(item);
+    this.touch();
   }
 
   move(id, toId) {
@@ -182,7 +251,7 @@ class Vault {
     if (item === this.root || item === this.bin) throw new Error('This folder cannot be moved');
     if (item.entries) for (let g = to; g; g = g.parentGroup) if (g === item) throw new Error('Cannot move a folder into itself');
     this.db.move(item, to);
-    this.dirty = true;
+    this.touch();
   }
 
   // ---- entries ----
@@ -194,9 +263,15 @@ class Vault {
 
   updateEntry(id, props) {
     const e = this.entry(id);
+    if (!this._differs(id, props)) return; // pressing OK without changing anything must not add an identical history snapshot (it holds the password)
     e.pushHistory();
     this._fill(e, props);
     e.times.update();
+  }
+
+  _differs(id, p) {
+    const cur = this.getEntry(id);
+    return Object.keys(p).some((k) => k in cur && JSON.stringify(k === 'customIcon' ? p[k] || null : p[k]) !== JSON.stringify(cur[k]));
   }
 
   _fill(e, p) {
@@ -210,10 +285,10 @@ class Vault {
     }
     if (p.autoType !== undefined) e.autoType.enabled = !!p.autoType;
     if (p.autoTypeSeq !== undefined) e.autoType.defaultSequence = p.autoTypeSeq || undefined;
-    this.dirty = true;
+    this.touch();
   }
 
-  deleteEntry(id) { this.db.remove(this.entry(id)); this.dirty = true; }
+  deleteEntry(id) { this.remove(this.entry(id)); }
 
   // Full entry including the password, for the edit dialog only.
   getEntry(id) {

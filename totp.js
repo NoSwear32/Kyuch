@@ -38,7 +38,8 @@ function parse(input, opts = {}) {
     if (u.hostname.toLowerCase() !== 'totp') throw new Error('Only time-based (totp) codes are supported');
     const q = u.searchParams;
     secret = q.get('secret') || '';
-    label = decodeURIComponent(u.pathname.replace(/^\//, ''));
+    try { label = decodeURIComponent(u.pathname.replace(/^\//, '')); } catch { label = u.pathname.replace(/^\//, ''); } // a stray % must not break the whole link
+    if ((q.get('encoder') || '').toLowerCase() === 'steam') throw new Error('Steam Guard codes are not supported');
     issuer = q.get('issuer') || (label.includes(':') ? label.split(':')[0] : '');
     digits = Number(q.get('digits')) || 6; period = Number(q.get('period')) || 30; algorithm = (q.get('algorithm') || 'SHA1').toUpperCase();
   }
@@ -47,6 +48,7 @@ function parse(input, opts = {}) {
   if (!Number.isInteger(period) || period < 5 || period > 300) throw new Error('The period must be between 5 and 300 seconds');
   if (!ALGS.includes(algorithm)) throw new Error('Algorithm must be SHA1, SHA256 or SHA512');
   const key = base32Decode(secret);
+  if (key.length < 10) throw new Error('That secret key is too short to be valid (at least 16 characters)');
   return { key, secret: base32Encode(key), digits, period, algorithm, issuer, label };
 }
 

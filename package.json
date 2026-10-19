@@ -1,12 +1,13 @@
 {
   "name": "kyuch",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Kyuch - a KeePass-compatible password manager",
   "main": "main.js",
   "scripts": {
     "test": "node --test test/core.test.js test/updater.test.js test/totp.test.js test/themes.test.js",
     "start": "electron .",
-    "deb": "bash scripts/build-deb.sh"
+    "deb": "bash scripts/build-deb.sh",
+    "dist:win": "electron-builder --win --x64 --publish never"
   },
   "keywords": [],
   "author": "",
@@ -18,10 +19,73 @@
     "kdbxweb": "^2.1.1"
   },
   "devDependencies": {
-    "electron": "44.7.0"
+    "electron": "44.9.0",
+    "electron-builder": "26.15.3"
   },
   "productName": "Kyuch",
   "overrides": {
     "@xmldom/xmldom": "0.8.15"
+  },
+  "build": {
+    "appId": "com.noswear.kyuch",
+    "productName": "Kyuch",
+    "copyright": "Copyright (c) NoSwear32",
+    "directories": {
+      "output": "dist-win"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "core.js",
+      "totp.js",
+      "argon2-worker.js",
+      "autotype.js",
+      "updater.js",
+      "update-key.pub",
+      "icon.png",
+      "win_type.ps1",
+      "renderer/**/*"
+    ],
+    "asarUnpack": [
+      "win_type.ps1"
+    ],
+    "electronLanguages": [
+      "en-US",
+      "en-GB",
+      "de"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.png",
+      "artifactName": "Kyuch-${version}-win.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Kyuch-Setup-${version}.exe",
+      "shortcutName": "Kyuch",
+      "uninstallDisplayName": "Kyuch",
+      "deleteAppDataOnUninstall": false
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeCliInspectArguments": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "onlyLoadAppFromAsar": true
+    }
   }
 }

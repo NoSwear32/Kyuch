@@ -13,16 +13,19 @@ APP="$OPT/resources/app"
 mkdir -p "$OPT"
 cp -a node_modules/electron/dist/. "$OPT/"
 mv "$OPT/electron" "$OPT/kyuch"
+# Runtime hardening baked into the binary: nobody can turn it into a plain Node interpreter (ELECTRON_RUN_AS_NODE), attach an inspector
+# (--inspect) or inject code through NODE_OPTIONS by editing the launcher or the environment.
+node node_modules/@electron/fuses/dist/bin.js write --app "$OPT/kyuch" RunAsNode=off EnableNodeOptionsEnvironmentVariable=off EnableNodeCliInspectArguments=off > /dev/null
 rm -f "$OPT/resources/default_app.asar"
 find "$OPT/locales" -name '*.pak' ! -name 'en-US.pak' ! -name 'en-GB.pak' ! -name 'de.pak' -delete
 
 # 2. The app + production-only node_modules
 mkdir -p "$APP"
-cp -a main.js preload.js core.js totp.js autotype.js updater.js update-key.pub uinput_type.py icon.png package.json package-lock.json renderer "$APP/"
+cp -a main.js preload.js core.js argon2-worker.js totp.js autotype.js updater.js update-key.pub uinput_type.py icon.png package.json package-lock.json renderer "$APP/"
 (cd "$APP" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null && rm -f package-lock.json)
 
 # 3. Launcher, desktop entry, icons, udev rule, docs
-mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/applications" "$STAGE/usr/lib/udev/rules.d" "$STAGE/usr/share/doc/kyuch" "$STAGE/DEBIAN"
+mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/applications" "$STAGE/usr/share/doc/kyuch" "$STAGE/DEBIAN"
 printf '#!/bin/sh\nexec /opt/Kyuch/kyuch "$@"\n' > "$STAGE/usr/bin/kyuch"
 chmod 755 "$STAGE/usr/bin/kyuch"
 cat > "$STAGE/usr/share/applications/kyuch.desktop" <<DESK
@@ -40,8 +43,11 @@ DESK
 for n in 16 32 48 64 128 256 512; do
   d="$STAGE/usr/share/icons/hicolor/${n}x${n}/apps"; mkdir -p "$d"; cp "brand/png/icon-$n.png" "$d/kyuch.png"
 done
-# auto-type types through /dev/uinput; give the logged-in desktop user (and nobody else) access to it
-echo 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"' > "$STAGE/usr/lib/udev/rules.d/60-kyuch-uinput.rules"
+# Auto-type types through /dev/uinput. Access is NOT granted by default (that would let every program of the user type into any window):
+# the user enables it in Settings, which runs this script as root through pkexec under the polkit policy below.
+mkdir -p "$STAGE/usr/lib/kyuch" "$STAGE/usr/share/polkit-1/actions"
+install -m 755 scripts/autotype-access.sh "$STAGE/usr/lib/kyuch/autotype-access"
+install -m 644 scripts/com.noswear.kyuch.autotype.policy "$STAGE/usr/share/polkit-1/actions/com.noswear.kyuch.autotype.policy"
 printf 'Kyuch %s\nCopyright (c) NoSwear32. All rights reserved.\nBundles Electron (MIT) and Chromium; see /opt/Kyuch/LICENSE and LICENSES.chromium.html.\n' "$VER" > "$STAGE/usr/share/doc/kyuch/copyright"
 
 # 4. Permissions + control files (policy: nothing group/world-writable; sandbox must be setuid root)
@@ -51,13 +57,19 @@ cat > "$STAGE/DEBIAN/postinst" <<'POST'
 #!/bin/sh
 set -e
 chmod 4755 /opt/Kyuch/chrome-sandbox || true
-if command -v udevadm >/dev/null 2>&1; then
-  udevadm control --reload 2>/dev/null || true
-  udevadm trigger --name-match=uinput 2>/dev/null || true
-fi
+# remove the pre-0.6 package's always-on udev rule if an upgrade left it behind
+rm -f /usr/lib/udev/rules.d/60-kyuch-uinput.rules
 exit 0
 POST
 chmod 755 "$STAGE/DEBIAN/postinst"
+cat > "$STAGE/DEBIAN/prerm" <<'PRERM'
+#!/bin/sh
+set -e
+# withdraw the auto-type permission (if the user enabled it) when Kyuch is removed
+case "$1" in remove|purge) /usr/lib/kyuch/autotype-access disable 2>/dev/null || true ;; esac
+exit 0
+PRERM
+chmod 755 "$STAGE/DEBIAN/prerm"
 SIZE=$(du -sk "$STAGE" | cut -f1)
 cat > "$STAGE/DEBIAN/control" <<CTRL
 Package: kyuch

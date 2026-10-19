@@ -52,7 +52,7 @@
 
 <div id="app" hidden>
   <div id="panes">
-    <nav id="tree"></nav>
+    <nav id="tree" role="tree" aria-label="Folders"></nav>
     <section id="list"></section>
     <aside id="detail"></aside>
   </div>
@@ -174,7 +174,15 @@
     <label class="check"><input type="checkbox" id="aAutoUpd"> Check for updates once a day when Kyuch starts</label>
     <div class="muted">Theme</div>
     <div id="aThemes" class="themes" role="radiogroup" aria-label="Theme"></div>
+    <fieldset id="aAccessBox" hidden>
+      <legend>Auto-type permission (Linux)</legend>
+      <small class="muted" id="aAccessText"></small>
+      <div class="row"><button type="button" id="aAccessBtn"></button></div>
+    </fieldset>
+    <label id="aLayoutWrap">Keyboard layout for auto-type <select id="aLayout"><option value="auto">Detect automatically (GNOME)</option><option value="us">US</option><option value="gb">UK (GB)</option></select></label>
     <label>Change master password <input id="aNewPw" type="password" autocomplete="off" placeholder="New master password (leave empty to keep)"></label>
+    <label>Repeat the new master password <input id="aNewPw2" type="password" autocomplete="off"></label>
+    <p class="error" id="aErr"></p>
     <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Apply</button></menu>
   </form>
 </dialog>

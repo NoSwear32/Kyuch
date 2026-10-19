@@ -1,8 +1,8 @@
 /* Themes. Each block defines the same variables. `.theme-card[data-theme]` reuses them so the Settings picker previews every theme in its own colours. */
-:root, .theme-card[data-theme="dark"] { --bg:#1b1d22; --panel:#23262d; --line:#343843; --text:#e6e8ec; --muted:#98a0ae; --accent:#3b6fe3; --on-accent:#ffffff; --danger:#ff7b84; --sel:#2f3b57; --btn:#2b2f38; --hover:#3a4150; --logo:#f85800; color-scheme:dark; }
-:root[data-theme="light"], .theme-card[data-theme="light"] { --bg:#f4f5f7; --panel:#ffffff; --line:#d9dce3; --text:#1d2127; --muted:#596273; --accent:#2f6fe4; --on-accent:#ffffff; --danger:#c3303a; --sel:#dbe7ff; --btn:#eceef2; --hover:#dde2ec; --logo:#f85800; color-scheme:light; }
+:root, .theme-card[data-theme="dark"] { --bg:#1b1d22; --panel:#23262d; --line:#343843; --text:#e6e8ec; --muted:#98a0ae; --accent:#f85800; --on-accent:#1b1d22; --danger:#ff7b84; --sel:#3a2a22; --btn:#2b2f38; --hover:#3a4150; --logo:#f85800; color-scheme:dark; }
+:root[data-theme="light"], .theme-card[data-theme="light"] { --bg:#f4f5f7; --panel:#ffffff; --line:#d9dce3; --text:#1d2127; --muted:#596273; --accent:#c94200; --on-accent:#ffffff; --danger:#c3303a; --sel:#ffe3d1; --btn:#eceef2; --hover:#dde2ec; --logo:#f85800; color-scheme:light; }
 /* "System" (no data-theme attribute) follows the OS: light only when the OS asks for it */
-@media (prefers-color-scheme: light) { :root:not([data-theme]) { --bg:#f4f5f7; --panel:#ffffff; --line:#d9dce3; --text:#1d2127; --muted:#596273; --accent:#2f6fe4; --on-accent:#ffffff; --danger:#c3303a; --sel:#dbe7ff; --btn:#eceef2; --hover:#dde2ec; --logo:#f85800; color-scheme:light; } }
+@media (prefers-color-scheme: light) { :root:not([data-theme]) { --bg:#f4f5f7; --panel:#ffffff; --line:#d9dce3; --text:#1d2127; --muted:#596273; --accent:#c94200; --on-accent:#ffffff; --danger:#c3303a; --sel:#ffe3d1; --btn:#eceef2; --hover:#dde2ec; --logo:#f85800; color-scheme:light; } }
 :root[data-theme="ocean"], .theme-card[data-theme="ocean"] { --bg:#0b1a26; --panel:#112535; --line:#1f3a50; --text:#e3f1fb; --muted:#8fb0c8; --accent:#38bdf8; --on-accent:#062232; --danger:#ff7f8a; --sel:#17405c; --btn:#163247; --hover:#1f4561; --logo:#38bdf8; color-scheme:dark; }
 :root[data-theme="forest"], .theme-card[data-theme="forest"] { --bg:#0e1a14; --panel:#14241c; --line:#25402f; --text:#e4f3ea; --muted:#93b3a0; --accent:#34d399; --on-accent:#052e1d; --danger:#ff8f86; --sel:#1a4a35; --btn:#1a3125; --hover:#234433; --logo:#34d399; color-scheme:dark; }
 :root[data-theme="amethyst"], .theme-card[data-theme="amethyst"] { --bg:#17121f; --panel:#1f1829; --line:#3a2d4f; --text:#efe9f8; --muted:#ab9cc4; --accent:#a78bfa; --on-accent:#1b1033; --danger:#ff82a3; --sel:#3a2c5c; --btn:#2a2038; --hover:#3b2d52; --logo:#a78bfa; color-scheme:dark; }
@@ -123,3 +123,5 @@ progress { width: 100%; height: 6px; accent-color: var(--accent); }
 .theme-card .chips i:nth-child(1) { background: var(--panel); border: 1px solid var(--line); } .theme-card .chips i:nth-child(2) { background: var(--accent); } .theme-card .chips i:nth-child(3) { background: var(--logo); }
 .theme-card[data-theme="system"] { background: linear-gradient(100deg, #1b1d22 50%, #f4f5f7 50%); color: #888; border-color: #8b92a0; }
 .theme-card[data-theme="system"] span { background: #5b6270; color: #fff; padding: 1px 8px; border-radius: 10px; }
+
+.node:focus-visible, tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

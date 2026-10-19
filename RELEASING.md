@@ -19,3 +19,23 @@ against `update-key.pub` (built into the app), then installs with `pkexec apt-ge
 4. Commit + push, then on GitHub: Releases > Draft a new release > tag `v<version>` > attach **both** the `.deb` and
    the `.deb.sig` > Publish.
 5. In an older installed Kyuch: About > Check for updates.
+
+## Windows release
+Build on any machine that can run electron-builder (this repo builds it from Linux; `wine` embeds the exe icon):
+1. `npm run dist:win` -> `dist-win/Kyuch-Setup-<version>.exe` (installer, per-user, no admin rights needed) and `dist-win/Kyuch-<version>-win.zip` (portable).
+2. `node scripts/sign-release.js dist-win/Kyuch-Setup-<version>.exe` -> `Kyuch-Setup-<version>.exe.sig`
+3. Attach `Kyuch-Setup-<version>.exe`, `Kyuch-Setup-<version>.exe.sig` (and optionally the zip) to the SAME GitHub release as the Linux files.
+   The Windows updater only looks for `Kyuch-Setup-*.exe` + `.sig`; the Linux updater only for `kyuch_*_amd64.deb` + `.sig`.
+Windows notes: the installer is not code-signed (no certificate), so SmartScreen shows "Unknown publisher" on first run.
+Auto-type on Windows types Unicode through SendInput (it cannot type into windows running as administrator).
+
+## Auto-type permission on Linux (changed in 0.6.0)
+The package no longer grants access to /dev/uinput on install (that let every program of the user type into any window).
+Settings > "Auto-type permission" runs `/usr/lib/kyuch/autotype-access enable` through pkexec (polkit policy
+`com.noswear.kyuch.autotype-access`), which writes `/etc/udev/rules.d/60-kyuch-uinput.rules`; "Withdraw permission" removes it, and so does removing the package.
+A rule created by hand elsewhere (e.g. the user's own /etc/udev/rules.d/60-uinput.rules) keeps working and is reported as "enabled by a rule outside Kyuch".
+
+## Build prerequisites for releases
+`npm run deb` needs dpkg-deb; `npm run dist:win` needs network access to GitHub for the Electron Windows runtime and electron-builder's helper tools
+(if a download stalls, fetch the file with curl and place it in ~/.cache/electron, see the checksum in node_modules/electron/checksums.json).
+Always run `npm ci` before building a release so the package contains exactly the locked dependencies.

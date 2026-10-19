@@ -13,25 +13,25 @@ const Gen = (() => {
 
   // One de-duplicated pool per enabled character class.
   function pools(o) {
-    const strip = (s) => [...new Set(o.noAmbiguous ? s.replace(LOOKALIKES, '') : s)].join('');
+    const strip = (s) => [...new Set([...(o.noAmbiguous ? s.replace(LOOKALIKES, '') : s)])]; // arrays of whole characters, so emoji are never split
     const out = [];
     for (const k of ['lower', 'upper', 'digits']) if (o[k]) out.push(strip(SETS[k]));
     if (o.symbols && (o.symbolSet ?? DEFAULT_SYMBOLS)) out.push(strip(o.symbolSet ?? DEFAULT_SYMBOLS));
-    return out.filter(Boolean);
+    return out.filter((a) => a.length);
   }
 
   function generate(o) {
-    const p = pools(o), len = Math.max(1, Math.floor(o.length));
+    const p = pools(o), len = Math.min(1024, Math.max(1, Math.floor(o.length) || 1)); // a typo'd length must not freeze the page
     if (!p.length) throw new Error('Select at least one character type');
     if (len < p.length) throw new Error(`Length must be at least ${p.length}`);
-    const all = [...new Set(p.join(''))];
+    const all = [...new Set(p.flat())];
     const out = p.map((s) => s[rnd(s.length)]); // guarantee one of every selected class
     while (out.length < len) out.push(all[rnd(all.length)]);
     for (let i = out.length - 1; i > 0; i--) { const j = rnd(i + 1); [out[i], out[j]] = [out[j], out[i]]; } // Fisher-Yates
     return out.join('');
   }
 
-  const entropy = (o) => { const n = new Set(pools(o).join('')).size; return n > 1 ? Math.floor(o.length * Math.log2(n)) : 0; };
+  const entropy = (o) => { const n = new Set(pools(o).flat()).size; return n > 1 ? Math.floor(o.length * Math.log2(n)) : 0; };
   const label = (bits) => (bits < 50 ? 'Weak' : bits < 70 ? 'Fair' : bits < 100 ? 'Good' : bits < 128 ? 'Strong' : 'Excellent');
 
   return { generate, entropy, label, pools, DEFAULT_SYMBOLS };

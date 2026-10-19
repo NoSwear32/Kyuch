@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <vendor>Kyuch</vendor>
+  <action id="com.noswear.kyuch.autotype-access">
+    <description>Change who may emulate a keyboard for Kyuch auto-type</description>
+    <message>Authentication is required to allow or withdraw Kyuch's permission to type for you (auto-type)</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/kyuch/autotype-access</annotate>
+  </action>
+</policyconfig>

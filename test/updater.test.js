@@ -44,7 +44,7 @@ test('version compare', () => {
 
 test('detects a newer release and downloads + verifies it', async () => {
   const u = mk(), info = await u.check();
-  assert.equal(info.newer, true); assert.equal(info.latest, '0.9.0'); assert.equal(info.deb.name, 'kyuch_0.9.0_amd64.deb');
+  assert.equal(info.newer, true); assert.equal(info.latest, '0.9.0'); assert.equal(info.pkg.name, 'kyuch_0.9.0_amd64.deb');
   const { file, sha256 } = await u.download(info);
   assert.ok(fs.readFileSync(file).equals(deb));
   assert.equal(sha256, crypto.createHash('sha256').update(deb).digest('hex'));
@@ -73,7 +73,7 @@ test('signature from a different key is rejected', async () => {
 test('missing assets are reported, not guessed', async () => {
   tweak = { noAssets: true };
   const u = mk();
-  await assert.rejects(u.download(await u.check()), /missing its .deb or .sig/);
+  await assert.rejects(u.download(await u.check()), /missing the installer or its .sig/);
 });
 
 test('refuses non-GitHub download addresses in normal mode', async () => {
@@ -123,4 +123,18 @@ test('cancel stops the download, reports it, and installs nothing', async () => 
   await assert.rejects(u.download(info, { signal: ac.signal, onProgress: (r) => { seen = r; if (r > 0) ac.abort(); } }), /Download cancelled/);
   assert.ok(seen > 0 && seen < 400_000, 'stopped part-way: ' + seen);
   assert.ok(Date.now() - started < 1000, 'cancel is immediate, not after the download');
+});
+
+test('picks the right release file per platform', async () => {
+  const rel = { tag_name: 'v9.0.0', assets: ['kyuch_9.0.0_amd64.deb', 'kyuch_9.0.0_amd64.deb.sig', 'Kyuch-Setup-9.0.0.exe', 'Kyuch-Setup-9.0.0.exe.sig', 'Kyuch-9.0.0-win.zip', 'evil.exe', 'Kyuch-Setup-9.0.0.exe.blockmap']
+    .map((name) => ({ name, browser_download_url: base + '/' + name, size: 1 })) };
+  const s2 = http.createServer((q, r) => r.end(JSON.stringify(rel)));
+  await new Promise((r) => s2.listen(0, '127.0.0.1', r));
+  const api = 'http://127.0.0.1:' + s2.address().port;
+  const linux = await createUpdater({ api, current: '0.1.0', publicKey: pub, platform: 'linux' }).check();
+  const win = await createUpdater({ api, current: '0.1.0', publicKey: pub, platform: 'win32' }).check();
+  assert.equal(linux.pkg.name, 'kyuch_9.0.0_amd64.deb'); assert.ok(linux.sigUrl.endsWith('kyuch_9.0.0_amd64.deb.sig'));
+  assert.equal(win.pkg.name, 'Kyuch-Setup-9.0.0.exe'); assert.ok(win.sigUrl.endsWith('Kyuch-Setup-9.0.0.exe.sig'));
+  await assert.rejects(createUpdater({ api, current: '0.1.0', publicKey: pub, platform: 'darwin' }).check(), /not available on this platform/);
+  s2.close();
 });

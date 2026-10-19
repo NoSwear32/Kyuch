@@ -48,7 +48,7 @@ function setState(s) {
   if (!s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
-    for (const id of ['ePass', 'aNewPw', 'nPw', 'nPw2', 'gOut', 'oSecret']) $(id).value = '';
+    for (const id of ['ePass', 'aNewPw', 'aNewPw2', 'nPw', 'nPw2', 'gOut', 'oSecret']) $(id).value = '';
     genCtl?.wipe(); clearInterval(detailTimer); clearInterval(otpDlgTimer); $('oCode').textContent = ''; $('oBox').hidden = true;
     query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return;
   }
@@ -73,11 +73,26 @@ function render() {
   renderTree(); renderList(); renderDetail();
 }
 
+// Re-rendering replaces the DOM; if the keyboard focus was inside `el`, put it back on the selected item.
+const keepFocus = (el, sel, fn) => { const had = el.contains(document.activeElement); fn(); if (had) el.querySelector(sel)?.focus(); };
+const selectEntry = (id) => { selEntry = id; reveal = null; renderList(); renderDetail(); };
+const stepFocus = (ev, container, selector) => { // Up/Down: activate the neighbouring item
+  const items = [...container.querySelectorAll(selector)], i = items.indexOf(ev.currentTarget), next = items[i + (ev.key === 'ArrowDown' ? 1 : -1)];
+  if (next) { ev.preventDefault(); next.click(); }
+};
+
 function renderTree() {
   const node = (g, isRoot) => {
     const open = expanded.has(g.id), kids = g.groups.length > 0;
     const row = h('div', {
       class: 'node' + (g.id === selGroup && !query ? ' sel' : ''), draggable: isRoot || g.isBin ? null : 'true',
+      tabindex: '0', role: 'treeitem', 'aria-selected': String(g.id === selGroup && !query), 'aria-expanded': kids ? String(open) : null,
+      onkeydown: (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.currentTarget.click(); }
+        else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') stepFocus(ev, $('tree'), '.node');
+        else if (ev.key === 'ArrowRight' && kids && !open) { expanded.add(g.id); keepFocus($('tree'), '.node.sel', renderTree); }
+        else if (ev.key === 'ArrowLeft' && kids && open) { expanded.delete(g.id); keepFocus($('tree'), '.node.sel', renderTree); }
+      },
       onclick: () => { selGroup = g.id; selEntry = null; query = ''; $('search').value = ''; render(); },
       ondragstart: (e) => e.dataTransfer.setData('text/plain', g.id),
       ondragover: (e) => { e.preventDefault(); row.classList.add('drop'); },
@@ -88,7 +103,7 @@ function renderTree() {
     h('span', {}, iconNode(g, '📁')), h('span', {}, g.name));
     return h('div', {}, row, kids && open ? h('div', { class: 'kids' }, g.groups.map((c) => node(c))) : null);
   };
-  $('tree').replaceChildren(node(S.root, true));
+  keepFocus($('tree'), '.node.sel', () => $('tree').replaceChildren(node(S.root, true)));
 }
 
 function visibleEntries() {
@@ -110,13 +125,18 @@ function renderList() {
     cur.id === S.root.id || cur.isBin ? null : h('button', { class: 'danger', onclick: () => delFolder(cur) }, 'Delete'));
   const table = rows.length ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Title'), h('th', {}, 'Username'), h('th', {}, query ? 'Folder' : 'URL'))),
     h('tbody', {}, rows.map(({ e, g }) => h('tr', {
-      class: e.id === selEntry ? 'sel' : '', draggable: 'true',
-      onclick: () => { selEntry = e.id; reveal = null; renderList(); renderDetail(); },
+      class: e.id === selEntry ? 'sel' : '', draggable: 'true', tabindex: '0', 'aria-selected': String(e.id === selEntry),
+      onkeydown: (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.currentTarget.click(); }
+        else if (ev.key === 'F2') editEntry(e.id);
+        else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') stepFocus(ev, $('list'), 'tbody tr');
+      },
+      onclick: () => selectEntry(e.id),
       ondblclick: () => editEntry(e.id),
       ondragstart: (ev) => ev.dataTransfer.setData('text/plain', e.id),
     }, h('td', {}, iconNode(e, '🔑'), ' ' + e.title), h('td', {}, e.username), h('td', {}, query ? pathOf(g.id) || g.name : e.url)))))
     : h('div', { class: 'empty' }, query ? 'No matches' : 'No entries here. Use Add, then Entry.');
-  $('list').replaceChildren(bar, table);
+  keepFocus($('list'), 'tr.sel', () => $('list').replaceChildren(bar, table));
 }
 
 let detailTimer = null;
@@ -129,7 +149,7 @@ function otpField(e) {
       const r = await call('entry:otp', { id: e.id });
       if (selEntry !== e.id) return;
       codeEl.textContent = fmtCode(r.code); bar.max = r.period; expires = r.validUntil;
-    } catch (err) { codeEl.textContent = err.message; clearInterval(detailTimer); } finally { fetching = false; }
+    } catch (err) { if (selEntry !== e.id) return; codeEl.textContent = err.message; clearInterval(detailTimer); } finally { fetching = false; }
   };
   clearInterval(detailTimer); load();
   detailTimer = setInterval(() => { const left = Math.max(0, (expires - Date.now()) / 1000); bar.value = left; if (left <= 0 && !fetching) load(); }, 500);
@@ -164,14 +184,22 @@ function renderDetail() {
 // ---------- actions ----------
 const copy = (id, field) => act(async () => { await call('entry:copy', { id, field }); toast(field === 'otp' ? 'One-time password copied' : `${field[0].toUpperCase() + field.slice(1)} copied`); });
 const autoType = (id) => act(() => call('entry:autotype', { id }));
-const move = (id, toId) => act(async () => { if (id && id !== toId) { expanded.add(toId); setState(await call('move', { id, toId })); } });
-const update = (ch, arg) => act(async () => setState(await call(ch, arg)));
+// A reply of null means "locked". If the page is already on the lock screen (the user locked while this was in flight), do not redo the lock-screen reset:
+// that would hide the unlock form they may already be typing into.
+const applyState = (s) => { if (s || S) setState(s); };
+const move = (id, toId) => act(async () => { if (id && id !== toId) { expanded.add(toId); applyState(await call('move', { id, toId })); } });
+const update = (ch, arg) => act(async () => applyState(await call(ch, arg)));
 
+const inBin = (gid) => { for (let n = groups.get(gid); n; n = n.parent && groups.get(n.parent.id)) if (n.g.isBin) return true; return false; };
 function delEntry(e, g) {
-  if (confirm(g.isBin ? `Permanently delete “${e.title}”?` : `Move “${e.title}” to the Recycle Bin?`)) update('entry:delete', { id: e.id });
+  const gone = inBin(g.id) || !S.binEnabled; // already in the bin, or this database has no bin: deleting is permanent
+  if (confirm(gone ? `Permanently delete “${e.title}”? This cannot be undone.` : `Move “${e.title}” to the Recycle Bin?`)) update('entry:delete', { id: e.id });
 }
 function delFolder(g) {
-  if (confirm(`Move folder “${g.name}” and everything in it to the Recycle Bin?`)) { selGroup = groups.get(g.id).parent.id; update('group:delete', { id: g.id }); }
+  const gone = inBin(g.id) || !S.binEnabled;
+  if (confirm(gone ? `Permanently delete folder “${g.name}” and everything in it? This cannot be undone.` : `Move folder “${g.name}” and everything in it to the Recycle Bin?`)) {
+    selGroup = groups.get(g.id).parent.id; update('group:delete', { id: g.id });
+  }
 }
 
 // ---------- icon picker ----------
@@ -265,7 +293,7 @@ $('btnGen').onclick = () => openGenerator(false);
 
 // ---------- one-time password (TOTP) tab ----------
 const fmtCode = (c) => { const k = Math.ceil(c.length / 2); return c.slice(0, k) + ' ' + c.slice(k); }; // 123456 -> 123 456
-let otpState = { uri: '', bad: false }, otpSeq = 0, otpExpires = 0, otpDlgTimer = null, otpWasLink = false;
+let otpState = { uri: '', bad: false }, otpSeq = 0, otpExpires = 0, otpDlgTimer = null, otpWasLink = false, otpTouched = false;
 
 function setTab(name) {
   const otp = name === 'otp';
@@ -300,16 +328,17 @@ function tickOtp() {
   $('oBar').value = left; $('oInfo').textContent = `New code in ${Math.ceil(left)} s`;
   if (left <= 0) { otpExpires = Infinity; otpPreview(); } // next time window: fetch the next code once
 }
-for (const id of ['oSecret', 'oDigits', 'oPeriod', 'oAlg']) $(id).addEventListener('input', otpPreview);
+for (const id of ['oSecret', 'oDigits', 'oPeriod', 'oAlg']) $(id).addEventListener('input', () => { otpTouched = true; otpPreview(); });
 $('oCopy').onclick = () => act(async () => { await call('clip:copy', { text: $('oCode').textContent.replace(' ', '') }); toast('One-time password copied'); });
 // An unusable one-time password must not be saved silently: keep the dialog open and show the problem.
 $('entryForm').addEventListener('submit', (e) => {
-  if (e.submitter?.value === 'ok' && otpState.bad) { e.preventDefault(); setTab('otp'); toast('Fix the one-time password, or clear that field', true); }
+  // (stored data we cannot read, e.g. a Steam link, is left exactly as it is unless the user touches this tab)
+  if (e.submitter?.value === 'ok' && otpState.bad && otpTouched) { e.preventDefault(); setTab('otp'); toast('Fix the one-time password, or clear that field', true); }
 });
 
 async function editEntry(id) {
   const base = id ? await act(() => call('entry:get', { id })) : { title: '', username: '', password: '', url: '', notes: '', icon: 0, tags: [], autoType: true, autoTypeSeq: '', otp: '' };
-  if (!base) return;
+  if (!base || $('entryDlg').open) return;
   const groupId = id ? entries.get(id).g.id : selGroup, g = groups.get(groupId).g;
   let ico = { icon: base.icon, customIcon: base.customIcon ?? null };
   $('entryDlgTitle').textContent = id ? 'Edit entry' : 'New entry';
@@ -324,23 +353,24 @@ async function editEntry(id) {
   setTab('details');
   $('oSecret').value = base.otp || ''; $('oSecret').type = 'password'; $('oShow').textContent = 'Show';
   $('oDigits').value = '6'; $('oPeriod').value = '30'; $('oAlg').value = 'SHA1'; $('oBox').hidden = true; $('oErr').textContent = '';
-  otpState = { uri: base.otp || '', bad: false }; otpSeq++; otpWasLink = /^otpauth:/i.test(base.otp || '');
+  otpTouched = false; otpState = { uri: base.otp || '', bad: false }; otpSeq++; otpWasLink = /^otpauth:/i.test(base.otp || '');
   if (base.otp) otpPreview(); else for (const k of ['oDigits', 'oPeriod', 'oAlg']) $(k).disabled = false;
   clearInterval(otpDlgTimer); otpDlgTimer = setInterval(tickOtp, 500);
   const saved = await show($('entryDlg'));
   clearInterval(otpDlgTimer);
-  const otp = otpState.uri;
+  const otp = otpState.uri, otpUntouched = !otpTouched; // an untouched link (Steam, extra parameters...) is saved exactly as stored
   $('oSecret').value = ''; $('oCode').textContent = ''; $('oBox').hidden = true; // the secret does not linger in the page
   if (!saved) return;
   const p = {
     title: $('eTitle').value, username: $('eUser').value, password: $('ePass').value, url: $('eUrl').value.trim(), notes: $('eNotes').value, icon: ico.icon, customIcon: ico.customIcon,
-    tags: $('eTags').value.split(',').map((t) => t.trim()).filter(Boolean), autoType: $('eAuto').checked, autoTypeSeq: $('eSeq').value.trim(), otp,
+    tags: $('eTags').value.split(',').map((t) => t.trim()).filter(Boolean), autoType: $('eAuto').checked, autoTypeSeq: $('eSeq').value.trim(), ...(otpUntouched ? {} : { otp }),
   };
   update(id ? 'entry:update' : 'entry:add', id ? { id, ...p } : { groupId, ...p });
 }
 
 // ---------- folder dialog (settings inherit from the parent folder) ----------
 function editFolder(id, parentId) {
+  if ($('folderDlg').open) return;
   const g = id ? groups.get(id).g : null;
   const parent = id ? groups.get(id).parent : groups.get(parentId).g;
   const inherited = (k) => parent ? parent.effective[k] : { value: S.defaults[k], from: null };
@@ -372,7 +402,19 @@ function editFolder(id, parentId) {
 
 // ---------- settings dialog ----------
 async function appSettings() {
-  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.altTabDelayMs; $('aAutoUpd').checked = S.cfg.autoUpdateCheck !== false; $('aNewPw').value = '';
+  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.altTabDelayMs; $('aAutoUpd').checked = S.cfg.autoUpdateCheck !== false; $('aNewPw').value = ''; $('aNewPw2').value = ''; $('aErr').textContent = '';
+  const info = await call('app:info'); $('aLayoutWrap').hidden = info.platform === 'win32'; $('aLayout').value = S.cfg.keyboardLayout || 'auto';
+  const paintAccess = (st) => {
+    $('aAccessBox').hidden = !st.supported;
+    if (!st.supported) return;
+    $('aAccessText').textContent = st.writable
+      ? (st.ours ? 'Enabled. Auto-type may emulate a keyboard.' : 'Enabled by a rule outside Kyuch (nothing to change here).')
+      : 'Off. Auto-type needs permission to emulate a keyboard (/dev/uinput). While this is on, every program you run can type into any window, so it is off until you allow it.';
+    $('aAccessBtn').hidden = !st.canChange || (st.writable && !st.ours);
+    $('aAccessBtn').textContent = st.writable ? 'Withdraw permission…' : 'Allow auto-type…';
+    $('aAccessBtn').onclick = () => act(async () => { paintAccess(await call('autotype:setAccess', { enable: !st.writable })); });
+  };
+  paintAccess(await call('autotype:status'));
   $('dbInfo').textContent = `${S.name} — ${S.path} — KDBX${S.legacy ? 3 : 4}`;
   let chosen = S.cfg.theme || 'system';
   const cards = THEMES.map((t) => h('button', { type: 'button', class: 'theme-card', 'data-theme': t.id, role: 'radio', onclick: () => { chosen = t.id; applyTheme(chosen); mark(); } },
@@ -380,14 +422,21 @@ async function appSettings() {
   const mark = () => cards.forEach((c) => c.setAttribute('aria-checked', String(c.dataset.theme === chosen)));
   $('aThemes').replaceChildren(...cards); mark(); // clicking a card previews it live
   const ok = await show($('settingsDlg'));
+  if (!S) return;                                  // the vault locked while Settings was open: the lock already closed everything
   if (!ok) { applyTheme(S.cfg.theme); return; }  // Cancel / Esc: back to the saved theme
   await act(async () => {
-    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: chosen, autoUpdateCheck: $('aAutoUpd').checked });
+    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: chosen, autoUpdateCheck: $('aAutoUpd').checked, keyboardLayout: $('aLayout').value });
     applyTheme(S.cfg.theme);
     armIdle();
     if ($('aNewPw').value) { setState(await call('db:changePassword', { password: $('aNewPw').value })); toast('Master password changed'); }
+    $('aNewPw').value = $('aNewPw2').value = '';
   });
 }
+
+// A typo in a new master password would lock the user out of their own database: make them type it twice, like when creating one.
+$('settingsForm').addEventListener('submit', (e) => {
+  if (e.submitter?.value === 'ok' && $('aNewPw').value !== $('aNewPw2').value) { e.preventDefault(); $('aErr').textContent = 'The two master passwords do not match.'; }
+});
 
 // ---------- lock screen ----------
 const nameOf = (p) => p.split(/[\\/]/).pop().replace(/\.kdbx$/i, '');
@@ -527,6 +576,8 @@ document.addEventListener('keydown', (e) => {
   else if (selEntry && ctrl && e.shiftKey && k === 'v') { e.preventDefault(); autoType(selEntry); }
   else if (selEntry && ctrl && k === 'c' && !typing && !getSelection().toString()) { e.preventDefault(); copy(selEntry, 'password'); }
 });
+
+kyuch.onAutoLock(() => { if (S) lock(true); }); // the machine is suspending or locking its screen
 
 let idle;
 function armIdle() {

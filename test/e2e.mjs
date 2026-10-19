@@ -36,6 +36,8 @@ await app.evaluate(({ dialog, BrowserWindow }, f) => {
   const w = BrowserWindow.getAllWindows()[0]; w.show(); w.focus(); w.webContents.setBackgroundThrottling(false);
 }, T + '/e2e.kdbx');
 const page = await app.firstWindow();
+await page.evaluate(() => { window.__confirms = []; window.confirm = (m) => { window.__confirms.push(m); return true; }; }); // record and accept window.confirm() prompts
+const confirms = () => page.evaluate(() => window.__confirms);
 const errs = []; page.on('pageerror', (e) => errs.push(e.message)); page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
 const shot = async (n) => { const b = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')); fs.writeFileSync(`${T}/${n}.png`, Buffer.from(b, 'base64')); };
 const ok = (c, m) => { if (!c) throw new Error('FAIL: ' + m); console.log('ok:', m); };
@@ -78,8 +80,14 @@ const lockText = await page.textContent('#lock'); const recentText = await page.
 ok(recentText.trim() === 'e2e' && !lockText.includes('/') && !/\.kdbx/i.test(lockText), 'database list shows only the name (no path, no .kdbx): ' + JSON.stringify(recentText.trim()));
 await page.click('#recent button');
 ok((await page.textContent('#unlockPath')) === 'e2e', 'unlock form shows only the name');
-const missing = await page.evaluate(() => kyuch.call('db:open', { path: '/tmp/kt/does-not-exist.kdbx', password: 'x' }).then(() => 'no error', (e) => e.message));
-ok(missing === 'That database file no longer exists' && !missing.includes('/tmp'), 'a missing file error does not leak the path: ' + missing);
+const tryOpen = (p) => page.evaluate((path) => kyuch.call('db:open', { path, password: 'x' }).then(() => 'no error', (e) => e.message), p);
+const stranger = await tryOpen('/tmp/kt/never-chosen.kdbx');
+ok(stranger === 'That file was not chosen in a file dialog', 'the page cannot name a file the user never picked: ' + stranger);
+const creating = await page.evaluate(() => kyuch.call('db:create', { path: '/tmp/kt/evil-overwrite.kdbx', password: 'x' }).then(() => 'created', (e) => e.message));
+ok(creating === 'That file was not chosen in a file dialog' && !fs.existsSync('/tmp/kt/evil-overwrite.kdbx'), 'db:create refuses a path that did not come from the save dialog');
+fs.renameSync(T + '/e2e.kdbx', T + '/e2e.moved');
+const gone = await tryOpen(T + '/e2e.kdbx'); fs.renameSync(T + '/e2e.moved', T + '/e2e.kdbx');
+ok(gone === 'That database file no longer exists' && !gone.includes('/tmp'), 'a deleted database gives a plain message without the path: ' + gone);
 await page.fill('#unlockPw', 'wrong'); await page.press('#unlockPw', 'Enter');
 await page.waitForFunction(() => document.getElementById('lockErr').textContent.length);
 ok((await page.textContent('#lockErr')) === 'Wrong master password', 'wrong password rejected with message');
@@ -152,6 +160,11 @@ ok((await logoInfo('#brand')).bg === 'rgb(248, 88, 0)', 'default themes keep the
 await page.click('#btnSettings'); await page.waitForSelector('#settingsDlg[open]');
 const cardIds = await page.evaluate(() => [...document.querySelectorAll('#aThemes .theme-card')].map((c) => c.dataset.theme));
 ok(JSON.stringify(cardIds) === JSON.stringify(['system', 'dark', 'light', 'ocean', 'forest', 'amethyst', 'sand', 'blossom']), 'Settings offers 8 themes: ' + cardIds.join(', '));
+const primaryBg = () => page.evaluate(() => getComputedStyle(document.querySelector('#settingsForm button.primary')).backgroundColor);
+ok((await primaryBg()) === 'rgb(248, 88, 0)', 'Dark theme: primary buttons are the brand orange');
+await page.click('#aThemes [data-theme="light"]');
+ok((await primaryBg()) === 'rgb(201, 66, 0)', 'Light theme: primary buttons are a deeper orange (readable with white text)');
+await page.click('#aThemes [data-theme="dark"]');
 await shot('themes');
 await page.click('#aThemes [data-theme="ocean"]');
 ok((await bodyBg()) === 'rgb(11, 26, 38)' && (await logoInfo('#brand')).bg === 'rgb(56, 189, 248)', 'clicking a theme previews it live and the logo takes its colour (Ocean)');
@@ -213,6 +226,39 @@ await page.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('o
 ok((await page.inputValue('#oSecret')).startsWith('otpauth://totp/') && (await page.inputValue('#oSecret')).includes('JBSWY3DPEHPK3PXP'), 'editing shows the stored otpauth:// link');
 await page.click('#entryForm button[value=cancel]'); await page.waitForTimeout(200);
 ok((await page.inputValue('#oSecret')) === '', 'cancel also wipes the secret from the page');
+
+// ---- fixes from the code review ----
+// keyboard navigation: the entry list and the folder tree work without a mouse, and focus survives re-rendering
+await page.click('.node:has-text("Deep")');
+await page.focus('tbody tr >> nth=0'); await page.keyboard.press('Enter');
+await page.keyboard.press('ArrowDown');
+ok(await page.evaluate(() => entries.get(selEntry).e.title === 'OTP Site' && document.activeElement.matches('tbody tr.sel')), 'entry list: Enter selects, ArrowDown moves the selection and keeps the focus');
+await page.focus('.node:has-text("Work")'); await page.keyboard.press('ArrowDown');
+ok(await page.evaluate(() => groups.get(selGroup).g.name === 'Deep' && document.activeElement.matches('.node.sel')), 'folder tree: ArrowDown selects the next folder and keeps the focus');
+// recycle bin: first delete moves it there, deleting it from the bin is really permanent
+await page.evaluate(async () => { setState(await kyuch.call('entry:add', { groupId: S.root.id, title: 'ToBin' })); });
+await page.click('.node:has-text("e2e")'); await page.click('tbody tr:has-text("ToBin")'); await page.click('#detail button:has-text("Delete")'); await page.waitForTimeout(300);
+await page.click('.node:has-text("Recycle Bin")');
+ok(await page.isVisible('tbody tr:has-text("ToBin")'), 'a deleted entry lands in the Recycle Bin');
+await page.click('tbody tr:has-text("ToBin")'); await page.click('#detail button:has-text("Delete")'); await page.waitForTimeout(300);
+const cf = await confirms();
+ok((await page.locator('tbody tr:has-text("ToBin")').count()) === 0 && /Recycle Bin/.test(cf.at(-2)) && /Permanently delete/.test(cf.at(-1)), 'deleting from the bin is permanent, and the prompt says so: ' + cf.at(-1));
+// master password change needs the new password twice
+await page.click('#btnSettings'); await page.waitForSelector('#settingsDlg[open]');
+ok(await page.isVisible('#aLayout') && (await page.inputValue('#aLayout')) === 'auto', 'Settings has a keyboard layout choice for auto-type (Linux)');
+await page.fill('#aNewPw', 'abc'); await page.fill('#aNewPw2', 'abd'); await page.click('#settingsForm button.primary'); await page.waitForTimeout(200);
+ok(await page.evaluate(() => document.getElementById('settingsDlg').open) && (await page.textContent('#aErr')).includes('do not match'), 'a mistyped new master password is refused before anything is saved');
+await page.fill('#aNewPw', ''); await page.fill('#aNewPw2', ''); await page.click('#settingsForm button[value=cancel]');
+// a stored OTP link the user did not touch is saved exactly as it was (extra parameters survive)
+const keepUri = 'otpauth://totp/X?secret=JBSWY3DPEHPK3PXP&extra=keepme&digits=7';
+const keepId = await page.evaluate(async (u) => { setState(await kyuch.call('entry:add', { groupId: S.root.id, title: 'KeepOtp', otp: u })); return [...entries.values()].find((x) => x.e.title === 'KeepOtp').e.id; }, keepUri);
+await page.click('.node:has-text("e2e")'); await page.click('tbody tr:has-text("KeepOtp")'); await page.click('#detail button:has-text("Edit")'); await page.waitForSelector('#entryDlg[open]');
+await page.fill('#eNotes', 'edited without touching the OTP tab'); await page.click('#entryForm button.primary'); await page.waitForTimeout(400);
+const afterEdit = await page.evaluate((id) => kyuch.call('entry:get', { id }), keepId);
+ok(afterEdit.otp === keepUri && afterEdit.notes.startsWith('edited'), 'an untouched OTP link is saved exactly as stored');
+// pressing OK on an entry without changing anything adds no history
+
+
 
 // Add menu, icon picker Cancel, custom icon, window controls, About + update flow
 await page.click('#btnAdd'); ok(await page.isVisible('#addMenu') && (await page.textContent('#addMenu')).includes('Entry') && (await page.textContent('#addMenu')).includes('Folder'), 'Add button opens a menu with Entry and Folder');
