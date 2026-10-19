@@ -46,6 +46,7 @@ function setState(s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
     for (const id of ['ePass', 'aNewPw', 'nPw', 'nPw2', 'gOut']) $(id).value = '';
+    genCtl?.wipe();
     query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return;
   }
   groups = new Map(); entries = new Map();
@@ -177,46 +178,65 @@ const iconButton = (btn, get, set) => {
 
 // ---------- entry dialog ----------
 // ---------- password generator dialog ----------
-const GEN_KEY = 'kyuch.gen';
+const GEN_KEY = 'kyuch.gen', MAX_MULTI = 30;
 function genPrefs() {
-  const d = { length: 20, lower: true, upper: true, digits: true, symbols: true, symbolSet: Gen.DEFAULT_SYMBOLS, noAmbiguous: false };
+  const d = { length: 20, lower: true, upper: true, digits: true, symbols: true, symbolSet: Gen.DEFAULT_SYMBOLS, noAmbiguous: false, multi: false, count: 5 };
   try { return { ...d, ...JSON.parse(localStorage.getItem(GEN_KEY) || '{}') }; } catch { return d; }
 }
-let genCtl = null;
+const clampCount = (v) => Math.min(MAX_MULTI, Math.max(2, Math.round(+v) || 5));
 function wireGenerator() {
   const el = (id) => $(id);
+  let useMode = false, current = []; // current = what is on screen, so Copy all matches it exactly
   const read = () => ({ length: +el('gLenN').value || 20, lower: el('gLower').checked, upper: el('gUpper').checked, digits: el('gDigits').checked,
-    symbols: el('gSymbols').checked, symbolSet: el('gSyms').value, noAmbiguous: el('gAmbig').checked });
+    symbols: el('gSymbols').checked, symbolSet: el('gSyms').value, noAmbiguous: el('gAmbig').checked, multi: el('gMulti').checked, count: clampCount(el('gCount').value) });
+  const copyText = (text, msg) => act(async () => { if (text) { await call('clip:copy', { text }); toast(msg); } });
+  const row = (pw) => h('div', { class: 'genrow' },
+    h('input', { class: 'mono', readonly: true, value: pw, 'aria-label': 'Generated password' }),
+    h('button', { type: 'button', onclick: () => copyText(pw, 'Password copied') }, 'Copy'),
+    useMode ? h('button', { type: 'button', class: 'primary', onclick: () => { el('gOut').value = pw; el('genDlg').close('ok'); } }, 'Use') : null);
   const regen = () => {
     const o = read();
+    el('gCountWrap').hidden = !o.multi; el('gList').hidden = !o.multi; el('gOut').hidden = o.multi;
+    el('gCopy').textContent = o.multi ? 'Copy all' : 'Copy';
+    el('gUse').hidden = !useMode || o.multi; // in multi mode every row has its own Use button
+    current = [];
     try {
-      el('gOut').value = Gen.generate(o); el('gErr').textContent = '';
+      current = Array.from({ length: o.multi ? o.count : 1 }, () => Gen.generate(o)); el('gErr').textContent = '';
       try { localStorage.setItem(GEN_KEY, JSON.stringify(o)); } catch { /* prefs are optional */ }
-    } catch (e) { el('gOut').value = ''; el('gErr').textContent = e.message; }
-    const bits = el('gOut').value ? Gen.entropy(o) : 0;
-    el('gMeter').value = bits; el('gInfo').textContent = el('gOut').value ? `${Gen.label(bits)} · ${bits} bits` : '';
+    } catch (e) { el('gErr').textContent = e.message; }
+    el('gOut').value = o.multi ? '' : (current[0] || '');
+    el('gList').replaceChildren(...(o.multi ? current.map(row) : []));
+    const bits = current.length ? Gen.entropy(o) : 0;
+    el('gMeter').value = bits; el('gInfo').textContent = current.length ? `${Gen.label(bits)} · ${bits} bits each` : '';
   };
   const sync = (from, to) => el(from).addEventListener('input', () => { el(to).value = el(from).value; regen(); });
   sync('gLen', 'gLenN'); sync('gLenN', 'gLen');
-  for (const id of ['gLower', 'gUpper', 'gDigits', 'gSymbols', 'gSyms', 'gAmbig']) el(id).addEventListener('input', regen);
+  for (const id of ['gLower', 'gUpper', 'gDigits', 'gSymbols', 'gSyms', 'gAmbig', 'gMulti', 'gCount']) el(id).addEventListener('input', regen);
+  // On blur just tidy the number (99 -> 30). Do NOT regenerate: the list already used the clamped count, and a regen here
+  // would swap the rows out from under a click on a row's Copy/Use button.
+  el('gCount').addEventListener('change', () => { el('gCount').value = clampCount(el('gCount').value); });
   el('gRegen').onclick = regen;
-  el('gCopy').onclick = () => act(async () => { if (el('gOut').value) { await call('clip:copy', { text: el('gOut').value }); toast('Password copied'); } });
-  return (useButton) => {
-    const p = genPrefs();
-    el('gLen').value = el('gLenN').value = p.length;
-    el('gLower').checked = p.lower; el('gUpper').checked = p.upper; el('gDigits').checked = p.digits; el('gSymbols').checked = p.symbols;
-    el('gSyms').value = p.symbolSet; el('gAmbig').checked = p.noAmbiguous;
-    el('gUse').hidden = !useButton;
-    regen();
+  el('gCopy').onclick = () => copyText(current.join('\n'), current.length > 1 ? `${current.length} passwords copied` : 'Password copied');
+  return {
+    open(useButton) {
+      const p = genPrefs();
+      useMode = useButton;
+      el('gLen').value = el('gLenN').value = p.length;
+      el('gLower').checked = p.lower; el('gUpper').checked = p.upper; el('gDigits').checked = p.digits; el('gSymbols').checked = p.symbols;
+      el('gSyms').value = p.symbolSet; el('gAmbig').checked = p.noAmbiguous; el('gMulti').checked = p.multi; el('gCount').value = clampCount(p.count);
+      regen();
+    },
+    wipe() { current = []; el('gOut').value = ''; el('gList').replaceChildren(); },
   };
 }
-// Resolves with the password if "Use password" was pressed, otherwise null. The password is wiped from the page afterwards.
+let genCtl = null;
+// Resolves with the password if one was chosen ("Use password" / a row's Use), otherwise null. Everything is wiped afterwards.
 async function openGenerator(useButton) {
   genCtl ??= wireGenerator();
-  genCtl(useButton);
+  genCtl.open(useButton);
   const ok = await show($('genDlg'));
   const pw = ok ? $('gOut').value : null;
-  $('gOut').value = '';
+  genCtl.wipe();
   return pw;
 }
 $('btnGen').onclick = () => openGenerator(false);
@@ -276,11 +296,11 @@ function editFolder(id, parentId) {
 
 // ---------- settings dialog ----------
 async function appSettings() {
-  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.typeStartDelay; $('aTheme').value = S.cfg.theme || 'system'; $('aNewPw').value = '';
+  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.altTabDelayMs; $('aTheme').value = S.cfg.theme || 'system'; $('aNewPw').value = '';
   $('dbInfo').textContent = `${S.name} — ${S.path} — KDBX${S.legacy ? 3 : 4}`;
   if (!(await show($('settingsDlg')))) return;
   await act(async () => {
-    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, typeStartDelay: $('aDelay').value, theme: $('aTheme').value });
+    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: $('aTheme').value });
     applyTheme(S.cfg.theme);
     armIdle();
     if ($('aNewPw').value) { setState(await call('db:changePassword', { password: $('aNewPw').value })); toast('Master password changed'); }

@@ -14,8 +14,9 @@ let win, vault = null, clipTimer = null, clipText = null;
 
 // ---- app-level config (not in the database) ----
 const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
-let cfg = { recent: [], autoLockMin: 5, typeStartDelay: 2, theme: 'system' };
+let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system' };
 try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; } catch { /* first run */ }
+delete cfg.typeStartDelay; // pre-0.3.2 setting, was in seconds
 const applyTheme = () => { nativeTheme.themeSource = ['system', 'light', 'dark'].includes(cfg.theme) ? cfg.theme : 'system'; };
 const saveCfg = () => fs.writeFileSync(cfgFile(), JSON.stringify(cfg));
 const remember = (p) => { cfg.recent = [p, ...cfg.recent.filter((r) => r !== p)].slice(0, 8); saveCfg(); };
@@ -72,7 +73,7 @@ async function adopt(v) {
 const handlers = {
   'cfg:get': () => cfg,
   'cfg:set': (c) => {
-    cfg = { ...cfg, autoLockMin: Math.max(0, +c.autoLockMin || 0), typeStartDelay: Math.max(0, +c.typeStartDelay || 0), theme: c.theme ?? cfg.theme };
+    cfg = { ...cfg, autoLockMin: Math.max(0, +c.autoLockMin || 0), altTabDelayMs: Math.min(10000, Math.max(0, Math.round(+c.altTabDelayMs) || 0)), theme: c.theme ?? cfg.theme };
     applyTheme(); saveCfg(); return cfg;
   },
   'clip:copy': ({ text }) => copy(String(text), DEFAULTS.clipboardClear), // generator output; auto-clears like entry passwords
@@ -176,7 +177,7 @@ const handlers = {
     const actions = autotype.parse(t.seq, t.fields); // validate before hiding the window
     // Every auto-type starts with Alt+Tab, which selects the previous window; the short pause lets that window take focus.
     actions.unshift({ key: 'alttab' }, { delay: 500 });
-    await new Promise((r) => setTimeout(r, cfg.typeStartDelay * 1000)); // time to let go of the shortcut keys
+    await new Promise((r) => setTimeout(r, cfg.altTabDelayMs)); // time to let go of the shortcut keys
     await autotype.type(actions, t.delay);
   },
 };

@@ -21,14 +21,14 @@ input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
 .ico { width: 1.25em; height: 1.25em; vertical-align: -0.25em; object-fit: contain; border-radius: 3px; }
 
 /* title bar: the window is frameless, so this row is the drag handle and holds the window buttons */
-#top { display: flex; align-items: center; gap: 6px; height: 44px; padding-left: 10px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
+#top { display: flex; align-items: center; gap: 4px; height: 35px; padding-left: 10px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
 #top button, #top input, #top .popmenu { -webkit-app-region: no-drag; }
-.brand { height: 20px; margin-right: 10px; }
+.brand { height: 16px; margin-right: 8px; }
 #tools { display: flex; gap: 4px; flex: 1; align-items: center; }
-#tools button { background: transparent; } #tools button:hover { background: var(--hover); }
-#search { max-width: 260px; margin-right: 8px; }
+#tools button { background: transparent; padding: 3px 11px; } #tools button:hover { background: var(--hover); }
+#search { max-width: 240px; margin-right: 6px; padding: 3px 10px; }
 #winctl { display: flex; margin-left: auto; align-self: stretch; }
-#winctl button { width: 46px; border-radius: 0; background: transparent; display: grid; place-items: center; padding: 0; }
+#winctl button { width: 34px; border-radius: 0; background: transparent; display: grid; place-items: center; padding: 0; }
 #winctl button:hover { background: var(--hover); } #winctl #wClose:hover { background: #e5484d; color: #fff; }
 .menuwrap { position: relative; }
 .popmenu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 30; }
@@ -79,7 +79,8 @@ menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 4
 
 .mono { font-family: ui-monospace, "DejaVu Sans Mono", monospace; }
 #gOut { font-size: 17px; letter-spacing: .5px; padding: 10px; word-break: break-all; }
-#gMeter { flex: 1; height: 14px; } .num { width: 72px; flex: none; } .checks { display: flex; gap: 14px; flex-wrap: wrap; }
+#gMeter { flex: 1; height: 14px; }
+#gList { display: grid; gap: 6px; max-height: 250px; overflow: auto; } .genrow { display: flex; gap: 6px; } .genrow input { flex: 1; } .num { width: 72px; flex: none; } .checks { display: flex; gap: 14px; flex-wrap: wrap; }
 .checks label.check { color: var(--text); font-size: 14px; }
 
 .about { display: grid; gap: 8px; justify-items: center; text-align: center; }
