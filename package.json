@@ -4,7 +4,7 @@
   "description": "Kyuch - a KeePass-compatible password manager",
   "main": "main.js",
   "scripts": {
-    "test": "node --test test/core.test.js test/updater.test.js test/totp.test.js test/themes.test.js",
+    "test": "node --test test/core.test.js test/updater.test.js test/totp.test.js test/themes.test.js test/browsers.test.js",
     "start": "electron .",
     "deb": "bash scripts/build-deb.sh",
     "dist:win": "electron-builder --win --x64 --publish never"

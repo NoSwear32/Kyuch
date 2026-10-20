@@ -179,7 +179,7 @@ ok(true, 'all five new themes apply their own colours');
 await setTheme('system');
 // title bar size (was 44 px; -20% = 35 px) and smaller window buttons
 const dims = await page.evaluate(() => ({ bar: document.getElementById('top').getBoundingClientRect().height, btn: document.getElementById('wMin').getBoundingClientRect().width, glyph: document.querySelector('#wClose svg').getBoundingClientRect().width }));
-ok(Math.round(dims.bar) === 35 && Math.round(dims.btn) === 34 && Math.round(dims.glyph) === 10, 'title bar is 35 px tall, window buttons 34 px wide: ' + JSON.stringify(dims));
+ok(Math.round(dims.bar) === 35 && Math.round(dims.btn) === 24 && Math.round(dims.glyph) === 12, 'title bar is 35 px tall, window buttons are 24 px circles: ' + JSON.stringify(dims));
 // Alt+Tab delay is in milliseconds, default 500
 await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs: 500, theme: 'system' }));
 await page.click('#btnSettings'); await page.waitForSelector('#settingsDlg[open]');
@@ -306,6 +306,24 @@ await page.waitForFunction(() => /failed/i.test(document.getElementById('updStat
 ok((await page.textContent('#updStatus')).includes('Signature check FAILED'), 'tampered update is refused'); tamper = false;
 await page.click('#aboutForm button[value=cancel]');
 await page.click('tbody tr:has-text("Iconic")');
+// ---- window buttons, logo menu, Settings/About on the database screen ----
+await page.hover('#wMin');
+const circ = await page.evaluate(() => { const b = document.getElementById('wMin'), cs = getComputedStyle(b); return { bg: cs.backgroundColor, radius: cs.borderRadius, w: Math.round(b.getBoundingClientRect().width) }; });
+ok(circ.bg === 'rgba(128, 128, 128, 0.34)' && circ.radius.includes('50%') && circ.w === 24, 'hovering a window button shows a gray circle: ' + JSON.stringify(circ));
+await page.hover('#wClose');
+ok((await page.evaluate(() => getComputedStyle(document.getElementById('wClose')).backgroundColor)) === 'rgba(128, 128, 128, 0.34)', 'the close button gets the same gray circle (no red)');
+await page.click('#brandBtn');
+const menuText = await page.textContent('#logoMenu');
+ok(await page.isVisible('#logoMenu') && ['New database', 'Open database', 'Lock', 'Close database', 'Settings', 'About', 'Quit Kyuch'].every((s) => menuText.includes(s)), 'clicking the logo opens a menu with database, lock, settings and quit actions');
+await page.keyboard.press('Escape'); ok(!(await page.isVisible('#logoMenu')), 'Escape closes the logo menu');
+await page.click('#brandBtn'); await page.click('#mLock'); await page.waitForSelector('#lock:not([hidden])');
+ok(await page.isVisible('#brandBtn') && await page.isVisible('#btnSettings') && await page.isVisible('#btnAbout') && !(await page.isVisible('#btnAdd')) && !(await page.isVisible('#btnSave')), 'the database screen keeps the logo menu, Settings and About, and hides the vault-only buttons');
+await page.click('#btnSettings'); await page.waitForSelector('#settingsDlg[open]');
+ok((await page.locator('#aThemes .theme-card').count()) === 8 && !(await page.isVisible('#aPwBox')) && (await page.locator('#aBrowser option').first().textContent()) === 'System default', 'Settings opens without a database: themes, browser choice, no master-password fields');
+ok(await page.isChecked('#aTray') && await page.isChecked('#aTrayLock'), 'closing to the tray (and locking when it goes there) is on by default');
+await page.click('#settingsForm button[value=cancel]');
+await page.click('#btnAbout'); await page.waitForSelector('#aboutDlg[open]'); await page.click('#aboutForm button[value=cancel]');
+await page.click('#recent button'); await page.fill('#unlockPw', 'hunter2'); await page.press('#unlockPw', 'Enter'); await page.waitForSelector('#app:not([hidden])');
 // NOTE: real auto-type (Alt+Tab + typing) is deliberately NOT run here: it types into whatever window the desktop
 // switches to, which on a real desktop is the developer's own app. Key events are covered by unit tests; the typing
 // itself is covered by the sandboxed harness (a textarea in our own window). Verify Alt+Tab by hand.
@@ -330,4 +348,29 @@ fs.rmSync(T + '/ud3', { recursive: true, force: true }); fs.mkdirSync(T + '/ud3'
 a2 = await launch(T + '/ud3'); p2 = await a2.firstWindow(); await p2.waitForTimeout(3500);
 ok((await openDialogs(p2)).length === 0, 'switched off in Settings: no check at launch');
 await a2.close();
+
+// ---- removing databases from the list (the file survives) and the close button minimizing to the tray ----
+fs.rmSync(T + '/ud5', { recursive: true, force: true }); fs.mkdirSync(T + '/ud5', { recursive: true });
+fs.writeFileSync(T + '/ud5/config.json', JSON.stringify({ autoUpdateCheck: false, recent: [T + '/e2e.kdbx', T + '/never-created.kdbx'] }));
+const a5 = await launch(T + '/ud5'); const p5 = await a5.firstWindow();
+await p5.evaluate(() => { window.confirm = () => true; });
+await p5.waitForSelector('#recent .recentrow >> nth=1');
+ok((await p5.locator('#recent .recentrow').count()) === 2 && (await p5.locator('#recent .trash').first().getAttribute('title')).includes('file is not deleted'), 'every database in the list has a trash can');
+await p5.click('#recent .recentrow:nth-child(2) .trash'); await p5.waitForFunction(() => document.querySelectorAll('#recent .recentrow').length === 1);
+await p5.click('#recent .recentrow .trash'); await p5.waitForFunction(() => document.querySelectorAll('#recent .recentrow').length === 0);
+const cfg5 = JSON.parse(fs.readFileSync(T + '/ud5/config.json', 'utf8'));
+ok(cfg5.recent.length === 0 && fs.existsSync(T + '/e2e.kdbx'), 'removed databases leave the list (saved), but the database file itself is untouched');
+await a5.evaluate(({ dialog }, f) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] }); }, T + '/e2e.kdbx');
+await p5.click('#btnOpenDb'); await p5.fill('#unlockPw', 'hunter2'); await p5.press('#unlockPw', 'Enter'); await p5.waitForSelector('#app:not([hidden])');
+ok(true, 'a removed database can be added again with Open file');
+await p5.click('#wClose'); await p5.waitForTimeout(800);
+const visible = () => a5.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible());
+ok(!(await visible()) && (await p5.evaluate(() => S === null)), 'the close button hides the window to the tray, and locks the database on the way');
+await a5.evaluate(({ app }) => app.emit('second-instance'));      // launching Kyuch again brings the hidden window back
+await p5.waitForTimeout(400);
+ok(await visible(), 'a hidden window comes back when Kyuch is started again');
+await p5.evaluate(() => kyuch.call('cfg:set', { closeToTray: false }));
+const closed = a5.waitForEvent('close'); await p5.click('#wClose');
+await Promise.race([closed, new Promise((_, rej) => setTimeout(() => rej(new Error('FAIL: the app did not quit with "minimize to tray" off')), 15000))]);
+ok(true, 'with "minimize to tray" turned off, the close button quits Kyuch');
 mock.close();

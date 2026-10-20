@@ -44,7 +44,7 @@ function setState(s) {
   S = s;
   if (s) applyTheme(s.cfg.theme);
   $('lock').hidden = !!s; $('app').hidden = !s;
-  for (const id of ['tools', 'search', 'brand']) $(id).hidden = !s; // the title bar keeps only the window buttons while locked
+  document.body.toggleAttribute('data-locked', !s); $('search').hidden = !s; // while locked the bar keeps the logo menu, Settings, About and the window buttons
   if (!s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
@@ -402,8 +402,15 @@ function editFolder(id, parentId) {
 
 // ---------- settings dialog ----------
 async function appSettings() {
-  $('aLock').value = S.cfg.autoLockMin; $('aDelay').value = S.cfg.altTabDelayMs; $('aAutoUpd').checked = S.cfg.autoUpdateCheck !== false; $('aNewPw').value = ''; $('aNewPw2').value = ''; $('aErr').textContent = '';
-  const info = await call('app:info'); $('aLayoutWrap').hidden = info.platform === 'win32'; $('aLayout').value = S.cfg.keyboardLayout || 'auto';
+  const hadVault = !!S, cfg = S ? S.cfg : await call('cfg:get');
+  $('aLock').value = cfg.autoLockMin; $('aDelay').value = cfg.altTabDelayMs; $('aAutoUpd').checked = cfg.autoUpdateCheck !== false;
+  $('aTray').checked = cfg.closeToTray !== false; $('aTrayLock').checked = cfg.lockOnTray !== false;
+  $('aNewPw').value = ''; $('aNewPw2').value = ''; $('aErr').textContent = '';
+  $('aPwBox').hidden = $('dbInfo').hidden = !hadVault; // database-specific parts only make sense with one open
+  const info = await call('app:info'); $('aLayoutWrap').hidden = info.platform === 'win32'; $('aLayout').value = cfg.keyboardLayout || 'auto';
+  const list = await call('browsers:list');
+  $('aBrowser').replaceChildren(...list.map((b) => h('option', { value: b.id }, b.label)));
+  $('aBrowser').value = list.some((b) => b.id === cfg.browser) ? cfg.browser : 'system';
   const paintAccess = (st) => {
     $('aAccessBox').hidden = !st.supported;
     if (!st.supported) return;
@@ -415,20 +422,24 @@ async function appSettings() {
     $('aAccessBtn').onclick = () => act(async () => { paintAccess(await call('autotype:setAccess', { enable: !st.writable })); });
   };
   paintAccess(await call('autotype:status'));
-  $('dbInfo').textContent = `${S.name} — ${S.path} — KDBX${S.legacy ? 3 : 4}`;
-  let chosen = S.cfg.theme || 'system';
+  if (hadVault) $('dbInfo').textContent = `${S.name} — ${S.path} — KDBX${S.legacy ? 3 : 4}`;
+  let chosen = cfg.theme || 'system';
   const cards = THEMES.map((t) => h('button', { type: 'button', class: 'theme-card', 'data-theme': t.id, role: 'radio', onclick: () => { chosen = t.id; applyTheme(chosen); mark(); } },
     h('span', {}, t.label), t.id === 'system' ? null : h('span', { class: 'chips' }, h('i'), h('i'), h('i'))));
   const mark = () => cards.forEach((c) => c.setAttribute('aria-checked', String(c.dataset.theme === chosen)));
   $('aThemes').replaceChildren(...cards); mark(); // clicking a card previews it live
   const ok = await show($('settingsDlg'));
-  if (!S) return;                                  // the vault locked while Settings was open: the lock already closed everything
-  if (!ok) { applyTheme(S.cfg.theme); return; }  // Cancel / Esc: back to the saved theme
+  if (hadVault && !S) return;                      // the vault locked while Settings was open: the lock already closed everything
+  if (!ok) { applyTheme(cfg.theme); return; }     // Cancel / Esc: back to the saved theme
   await act(async () => {
-    S.cfg = await call('cfg:set', { autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: chosen, autoUpdateCheck: $('aAutoUpd').checked, keyboardLayout: $('aLayout').value });
-    applyTheme(S.cfg.theme);
-    armIdle();
-    if ($('aNewPw').value) { setState(await call('db:changePassword', { password: $('aNewPw').value })); toast('Master password changed'); }
+    const next = await call('cfg:set', {
+      autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: chosen, autoUpdateCheck: $('aAutoUpd').checked, keyboardLayout: $('aLayout').value,
+      closeToTray: $('aTray').checked, lockOnTray: $('aTrayLock').checked, browser: $('aBrowser').value,
+    });
+    if (S) S.cfg = next;
+    applyTheme(next.theme);
+    if (S) armIdle();
+    if (S && $('aNewPw').value) { setState(await call('db:changePassword', { password: $('aNewPw').value })); toast('Master password changed'); }
     $('aNewPw').value = $('aNewPw2').value = '';
   });
 }
@@ -450,8 +461,23 @@ async function showRecent() {
   unlockPath = null; $('unlockForm').hidden = true; $('lockErr').textContent = '';
   const cfg = await call('cfg:get');
   const labels = dbLabels(cfg.recent);
-  $('recent').replaceChildren(...cfg.recent.map((p, i) => h('button', { onclick: () => pickUnlock(p, labels[i]) }, labels[i])));
+  $('recent').replaceChildren(...cfg.recent.map((p, i) => h('div', { class: 'recentrow' },
+    h('button', { class: 'grow', onclick: () => pickUnlock(p, labels[i]) }, labels[i]),
+    h('button', { class: 'trash', title: 'Remove from this list (the file is not deleted)', 'aria-label': `Remove ${labels[i]} from the list`, onclick: () => removeRecent(p, labels[i]) }, trashIcon()))));
 }
+const trashIcon = () => { // inline SVG (no innerHTML): a trash can
+  const ns = 'http://www.w3.org/2000/svg', s = document.createElementNS(ns, 'svg');
+  for (const [k, v] of Object.entries({ width: 15, height: 15, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })) s.setAttribute(k, v);
+  const p = document.createElementNS(ns, 'path'); p.setAttribute('d', 'M2.5 4h11M6.2 4V2.6h3.6V4M4 4l.7 9.2c0 .5.4.8.9.8h4.8c.5 0 .9-.3.9-.8L12 4M6.6 6.8v4.4M9.4 6.8v4.4');
+  s.append(p); return s;
+};
+// Forgets a database in the list only. The file on disk is never touched.
+const removeRecent = (p, label) => act(async () => {
+  if (!confirm(`Remove “${label}” from this list?\n\nThe database file itself is not deleted; you can add it again with Open file.`)) return;
+  if (unlockPath === p) { unlockPath = null; $('unlockForm').hidden = true; }
+  await call('recent:remove', { path: p });
+  showRecent();
+});
 function pickUnlock(p, label = nameOf(p)) {
   unlockPath = p; $('unlockPath').textContent = label; $('unlockForm').hidden = false; $('unlockPw').value = ''; $('unlockPw').focus();
 }
@@ -463,8 +489,14 @@ $('unlockForm').onsubmit = (e) => {
     catch (err) { $('lockErr').textContent = err.message; $('unlockPw').select(); }
   });
 };
-$('btnOpenDb').onclick = () => act(async () => { const p = await call('pick:open'); if (p) pickUnlock(p); });
-$('btnNewDb').onclick = () => act(async () => {
+// Open a database: when one is already open it is closed first (asking about unsaved changes), then the unlock form appears for the new one.
+const openDatabase = () => act(async () => {
+  const p = await call('pick:open'); if (!p) return;
+  if (S) { if (!(await call('db:lock'))) return; setState(null); }
+  pickUnlock(p);
+});
+$('btnOpenDb').onclick = openDatabase;
+const newDatabase = () => act(async () => {
   const p = await call('pick:new'); if (!p) return;
   $('newDbPath').textContent = nameOf(p); $('nPw').value = $('nPw2').value = ''; $('newDbErr').textContent = '';
   const dlg = $('newDbDlg');
@@ -475,6 +507,7 @@ $('btnNewDb').onclick = () => act(async () => {
   $('nPw').value = $('nPw2').value = '';
   if (s) { setState(s); armIdle(); }
 });
+$('btnNewDb').onclick = newDatabase;
 
 // ---------- toolbar, shortcuts, auto-lock ----------
 const lock = (auto) => act(async () => { if (await call('db:lock', { auto: auto === true })) setState(null); else armIdle(); });
@@ -488,12 +521,24 @@ $('btnSave').onclick = () => update('db:save');
 $('btnSettings').onclick = appSettings;
 
 // ---------- Add menu ----------
-const closeAdd = () => { $('addMenu').hidden = true; $('btnAdd').setAttribute('aria-expanded', 'false'); };
-$('btnAdd').onclick = (e) => { e.stopPropagation(); $('addMenu').hidden = !$('addMenu').hidden; $('btnAdd').setAttribute('aria-expanded', String(!$('addMenu').hidden)); };
-$('addEntry').onclick = () => { closeAdd(); editEntry(null); };
-$('addFolder').onclick = () => { closeAdd(); editFolder(null, selGroup); };
-document.addEventListener('click', closeAdd);
-document.addEventListener('keydown', (e) => e.key === 'Escape' && closeAdd());
+const MENUS = [['btnAdd', 'addMenu'], ['brandBtn', 'logoMenu']];
+const closeMenus = () => { for (const [b, m] of MENUS) { $(m).hidden = true; $(b).setAttribute('aria-expanded', 'false'); } };
+for (const [b, m] of MENUS) {
+  $(b).onclick = (e) => { e.stopPropagation(); const wasClosed = $(m).hidden; closeMenus(); $(m).hidden = !wasClosed; $(b).setAttribute('aria-expanded', String(wasClosed)); };
+}
+$('addEntry').onclick = () => { closeMenus(); editEntry(null); };
+$('addFolder').onclick = () => { closeMenus(); editFolder(null, selGroup); };
+// the logo menu
+$('mNew').onclick = () => { closeMenus(); newDatabase(); };
+$('mOpen').onclick = () => { closeMenus(); openDatabase(); };
+$('mLock').onclick = () => { closeMenus(); lock(); };
+$('mClose').onclick = () => { closeMenus(); lock(); };       // closing a database = back to the database list
+$('mSettings').onclick = () => { closeMenus(); appSettings(); };
+$('mAbout').onclick = () => { closeMenus(); act(() => openAbout()); };
+$('mQuit').onclick = () => { closeMenus(); act(() => call('app:quit')); };
+document.addEventListener('click', closeMenus);
+document.addEventListener('keydown', (e) => e.key === 'Escape' && closeMenus());
+kyuch.onLocked(() => setState(null)); // the window went to the tray and the database was locked on the way
 
 // ---------- window controls (frameless window) ----------
 $('wMin').onclick = () => call('win:minimize');

@@ -33,9 +33,6 @@ input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
 #tools { display: flex; gap: 4px; flex: 1; align-items: center; }
 #tools button { background: transparent; padding: 3px 11px; } #tools button:hover { background: var(--hover); }
 #search { max-width: 240px; margin-right: 6px; padding: 3px 10px; }
-#winctl { display: flex; margin-left: auto; align-self: stretch; }
-#winctl button { width: 34px; border-radius: 0; background: transparent; display: grid; place-items: center; padding: 0; }
-#winctl button:hover { background: var(--hover); } #winctl #wClose:hover { background: #e5484d; color: #fff; }
 .menuwrap { position: relative; }
 .popmenu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 30; }
 .popmenu button { display: block; width: 100%; text-align: left; background: transparent; }
@@ -43,7 +40,7 @@ input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
 #lock { display: grid; place-items: center; }
 .card { width: min(420px, 92vw); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 24px; display: grid; gap: 12px; }
 .card .mark { height: 84px; justify-self: center; } .card .word { height: 36px; justify-self: center; }
-#recent button { display: block; width: 100%; text-align: left; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#recent > button { display: block; width: 100%; text-align: left; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #unlockForm { display: grid; gap: 8px; }
 
 #app { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
@@ -125,3 +122,19 @@ progress { width: 100%; height: 6px; accent-color: var(--accent); }
 .theme-card[data-theme="system"] span { background: #5b6270; color: #fff; padding: 1px 8px; border-radius: 10px; }
 
 .node:focus-visible, tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* window buttons: round, with a gray circle on hover (close included) */
+#winctl { display: flex; gap: 6px; margin-left: auto; align-items: center; padding-right: 10px; }
+#winctl button { width: 24px; height: 24px; padding: 0; border-radius: 50%; background: transparent; display: grid; place-items: center; }
+#winctl button:hover, #winctl #wClose:hover { background: rgba(128, 128, 128, .34); color: inherit; }
+#winctl button:active { background: rgba(128, 128, 128, .5); }
+/* logo = menu button */
+.brandbtn { background: transparent; padding: 5px 9px; border-radius: 8px; display: flex; align-items: center; margin-right: 6px; }
+.brandbtn:hover { background: var(--hover); } .brandbtn .brand { margin: 0; display: block; }
+body[data-locked] .needs-db { display: none !important; }
+.popmenu hr.sep { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+/* database list rows with a trash can */
+.recentrow { display: flex; gap: 6px; margin-bottom: 6px; } .recentrow button { margin: 0; }
+.recentrow .grow { flex: 1 1 auto; min-width: 0; width: auto; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recentrow .trash { flex: none; width: 38px; display: grid; place-items: center; padding: 0; } .recentrow .trash:hover { color: var(--danger); }
+.stack { display: grid; gap: 10px; }

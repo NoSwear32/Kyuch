@@ -1,10 +1,11 @@
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Vault, DEFAULTS } = require('./core');
 const autotype = require('./autotype');
 const { createUpdater } = require('./updater');
 const totp = require('./totp');
+const browsers = require('./browsers');
 const { execFile } = require('node:child_process');
 const ACCESS_HELPER = '/usr/lib/kyuch/autotype-access', ACCESS_RULE = '/etc/udev/rules.d/60-kyuch-uinput.rules';
 function autotypeStatus() {
@@ -26,7 +27,7 @@ let win, vault = null, clipTimer = null, clipText = null;
 
 // ---- app-level config (not in the database) ----
 const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
-let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: true, lastUpdateCheck: 0, keyboardLayout: 'auto' };
+let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: true, lastUpdateCheck: 0, keyboardLayout: 'auto', closeToTray: true, lockOnTray: true, browser: 'system' };
 try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; } catch { /* first run */ }
 delete cfg.typeStartDelay; // pre-0.3.2 setting, was in seconds
 // Native widgets (file dialogs, message boxes) follow the dark/light kind of the chosen theme.
@@ -72,6 +73,45 @@ const state = () => vault && {
   name: vault.db.meta.name, path: vault.path, dirty: vault.dirty, legacy: vault.legacy, binEnabled: vault.binEnabled, defaults: DEFAULTS, root: vault.tree(), icons: vault.icons(), cfg,
 };
 
+// Idle auto-lock must never wait on a modal (the user is away): save atomically, then lock. Everything else asks about unsaved changes first.
+async function lockVault(auto) {
+  if (auto && vault?.dirty) { try { await vault.save(); } catch { /* fall back to the prompt below */ } }
+  if (!(await canLeave())) return false;
+  clearClipboard();
+  vault = null;
+  return true;
+}
+
+// ---- system tray: closing the window can minimize to the tray instead of quitting ----
+let tray = null, quitting = false, closing = false;
+function showWindow() { if (win) { win.show(); win.focus(); } }
+function ensureTray() {
+  if (tray && !tray.isDestroyed()) return;
+  try {
+    const icon = nativeImage.createFromPath(path.join(__dirname, 'renderer', 'logo-mark.png')).resize({ height: 32 });
+    tray = new Tray(icon);
+    tray.setToolTip('Kyuch');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Show Kyuch', click: showWindow },
+      { label: 'Lock', click: async () => { if (await lockVault(false)) win?.webContents.send('app:locked'); } },
+      { type: 'separator' },
+      { label: 'Quit Kyuch', click: () => quitApp() },
+    ]));
+    tray.on('click', () => (win?.isVisible() ? win.hide() : showWindow()));
+  } catch { tray = null; } // no tray available: closing the window then quits, so it can never vanish with no way back
+}
+function dropTray() { if (tray && !tray.isDestroyed()) tray.destroy(); tray = null; }
+async function hideToTray() {
+  if (cfg.lockOnTray && vault) { if (!(await lockVault(false))) return; win.webContents.send('app:locked'); } // a hidden window must not hold an open vault
+  win.hide();
+}
+async function quitApp() {
+  if (!(await canLeave())) return;
+  closing = quitting = true; clearClipboard();
+  app.quit();
+}
+app.on('before-quit', () => { quitting = true; });
+
 const filters = [{ name: 'KeePass database', extensions: ['kdbx'] }];
 const approved = new Set(cfg.recent);                       // paths the page may name: chosen in a native dialog, or opened before
 const kdbxPath = (p) => (/\.kdbx$/i.test(p) ? p : p + '.kdbx');
@@ -103,8 +143,18 @@ const handlers = {
   'cfg:set': (c) => {
     cfg = { ...cfg, autoLockMin: Math.min(1440, Math.max(0, +c.autoLockMin || 0)), // 0 = never; a huge value would overflow the timer and fire at once
       keyboardLayout: ['auto', 'us', 'gb'].includes(c.keyboardLayout) ? c.keyboardLayout : cfg.keyboardLayout, altTabDelayMs: Math.min(10000, Math.max(0, Math.round(+c.altTabDelayMs) || 0)), theme: THEMES.some((t) => t.id === c.theme) ? c.theme : cfg.theme, autoUpdateCheck: c.autoUpdateCheck === undefined ? cfg.autoUpdateCheck : !!c.autoUpdateCheck };
-    applyTheme(); saveCfg(); return cfg;
+    for (const k of ['closeToTray', 'lockOnTray']) if (typeof c[k] === 'boolean') cfg[k] = c[k];
+    if (browsers.IDS.has(c.browser)) cfg.browser = c.browser;       // only ids from the fixed browser table, never a command
+    applyTheme(); saveCfg();
+    if (cfg.closeToTray) ensureTray(); else dropTray();
+    return cfg;
   },
+  'browsers:list': () => [{ id: 'system', label: 'System default' }, ...browsers.detect().map(({ id, label }) => ({ id, label }))],
+  'recent:remove': ({ path: p }) => { // forget a database in the list; the file itself is never touched
+    cfg.recent = cfg.recent.filter((r) => r !== p); approved.delete(p); saveCfg();
+    return cfg;
+  },
+  'app:quit': () => quitApp(),
   'clip:copy': ({ text }) => copy(String(text), DEFAULTS.clipboardClear), // generator output; auto-clears like entry passwords
   'state': () => state(),
   'app:info': () => ({ version: app.getVersion(), canInstall: canSelfInstall(), platform: process.platform }),
@@ -206,14 +256,7 @@ const handlers = {
     if (await confirmReplace(p, r.filePath)) await vault.save(p, { copy: true }); // a copy: the open database stays the open database
     return state();
   },
-  'db:lock': async ({ auto } = {}) => {
-    // Idle auto-lock must never wait on a modal (the user is away): save atomically, then lock.
-    if (auto && vault?.dirty) { try { await vault.save(); } catch { /* fall back to the prompt below */ } }
-    if (!(await canLeave())) return false;
-    clearClipboard();
-    vault = null;
-    return true;
-  },
+  'db:lock': ({ auto } = {}) => lockVault(auto),
   'db:changePassword': async ({ password }) => {
     if (!password) throw new Error('Master password cannot be empty');
     await vault.changePassword(password);
@@ -249,8 +292,7 @@ const handlers = {
   'entry:open': ({ id }) => {
     let u = vault.secret(id, 'URL').trim();
     if (!/^[a-z][a-z0-9+.-]*:/i.test(u)) u = 'https://' + u;
-    if (!/^https?:/i.test(u)) throw new Error('Only http(s) URLs can be opened');
-    return shell.openExternal(u);
+    return browsers.openUrl(u, cfg.browser, shell);
   },
   'entry:autotype': async ({ id }) => {
     if (typing) throw new Error('Auto-type is already running');
@@ -313,10 +355,11 @@ if (gotLock) app.whenReady().then(() => {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.on('will-attach-webview', (e) => e.preventDefault());
   for (const ev of ['suspend', 'lock-screen']) powerMonitor.on(ev, () => win?.webContents.send('app:autolock')); // a sleeping/locked machine must not leave the vault open
-  let closing = false;
+  if (cfg.closeToTray) ensureTray();
   win.on('close', async (e) => {
     if (closing) return;
     e.preventDefault();
+    if (!quitting && cfg.closeToTray && tray) { await hideToTray(); return; } // the X button: minimize to the tray
     if (await canLeave()) { closing = true; clearClipboard(); win.close(); }
   });
   win.loadFile('renderer/index.html');
