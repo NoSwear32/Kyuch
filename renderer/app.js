@@ -1,55 +1,21 @@
 // UI only. Passwords stay in the main process; this file only ever sees them when the user opens an entry.
-const $ = (id) => document.getElementById(id);
-const call = (ch, arg) => kyuch.call(ch, arg);
-const h = (tag, a = {}, ...kids) => {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(a)) {
-    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-    else if (k === 'class') el.className = v;
-    else if (v !== false && v != null) el.setAttribute(k, v === true ? '' : v);
-  }
-  el.append(...kids.flat().filter((x) => x != null && x !== false));
-  return el;
-};
-
 let S = null;                       // latest state from main (never contains passwords)
 let selGroup = null, selEntry = null, query = '';
 const expanded = new Set();
 let groups = new Map(), entries = new Map(); // id -> {g,parent} / {e,g}
 let reveal = null;                  // {id,text} while a password is shown in the detail pane
 
-function toast(msg, bad) {
-  const t = $('toast'); t.textContent = msg; t.className = bad ? 'bad' : ''; t.hidden = false;
-  clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), bad ? 5000 : 1800);
-}
-const act = async (fn) => { try { return await fn(); } catch (e) { toast(e.message, true); } };
-
-function show(dlg) {
-  dlg.returnValue = '';
-  dlg.showModal();
-  return new Promise((r) => dlg.addEventListener('close', () => r(dlg.returnValue === 'ok'), { once: true }));
-}
-
-// ---------- theme: explicit data-theme wins, "system" follows the OS ----------
-const isDark = () => {
-  const t = THEMES.find((x) => x.id === document.documentElement.dataset.theme);
-  return t ? t.dark : matchMedia('(prefers-color-scheme: dark)').matches; // no data-theme = "System"
-};
-const paintThemeBtn = () => { $('themeBtn').textContent = isDark() ? 'Light mode' : 'Dark mode'; };
-function applyTheme(theme) { if (THEMES.some((t) => t.id === theme && t.id !== 'system')) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; paintThemeBtn(); }
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeBtn);
-
 // ---------- state ----------
 function setState(s) {
   S = s;
-  if (s) applyTheme(s.cfg.theme);
+  if (s) { applyTheme(s.cfg.theme); ICON_MAP = s.icons || {}; }
   $('lock').hidden = !!s; $('app').hidden = !s;
   document.body.toggleAttribute('data-locked', !s); $('search').hidden = !s; // while locked the bar keeps the logo menu, Settings, About and the window buttons
   if (!s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
-    for (const id of ['ePass', 'aNewPw', 'aNewPw2', 'nPw', 'nPw2', 'gOut', 'oSecret']) $(id).value = '';
-    genCtl?.wipe(); clearInterval(detailTimer); clearInterval(otpDlgTimer); $('oCode').textContent = ''; $('oBox').hidden = true;
+    for (const id of ['aNewPw', 'aNewPw2', 'nPw', 'nPw2', 'gOut']) $(id).value = '';
+    genCtl?.wipe(); clearInterval(detailTimer);
     query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return;
   }
   groups = new Map(); entries = new Map();
@@ -62,9 +28,6 @@ function setState(s) {
 }
 
 const pathOf = (id) => { const out = []; for (let g = groups.get(id); g?.parent; g = groups.get(g.parent.id)) out.unshift(g.g.name); return out.join(' / '); };
-// Icon for an entry/folder: the user's own image if one is set, otherwise the standard KeePass icon (emoji).
-const iconNode = (o, fallback) => (o.customIcon && S?.icons?.[o.customIcon] ? h('img', { class: 'ico', src: S.icons[o.customIcon], alt: '' }) : (ICONS[o.icon] ?? fallback));
-const yn = (v) => (v === true ? 'Yes' : v === false ? 'No' : v);
 
 // ---------- render ----------
 function render() {
@@ -202,203 +165,11 @@ function delFolder(g) {
   }
 }
 
-// ---------- icon picker ----------
-// Resolves with {icon, customIcon}. Cancel, Esc and clicking outside all resolve with the unchanged value.
-function pickIcon(cur) {
-  return new Promise((res) => {
-    const dlg = $('iconDlg');
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; res(v); } dlg.close(); };
-    $('iconGrid').replaceChildren(...ICONS.map((ic, i) => h('button', { type: 'button', class: !cur.customIcon && cur.icon === i ? 'on' : '', title: `#${i}`, onclick: () => finish({ icon: i, customIcon: null }) }, ic)));
-    $('customGrid').replaceChildren(...Object.entries(S.icons || {}).map(([id, src]) =>
-      h('button', { type: 'button', class: cur.customIcon === id ? 'on' : '', onclick: () => finish({ icon: cur.icon, customIcon: id }) }, h('img', { class: 'ico', src, alt: '' }))));
-    $('iconAdd').onclick = () => act(async () => {
-      const s = await call('icon:add');
-      if (s) { setState(s); finish({ icon: cur.icon, customIcon: s.newIcon }); } // new icon is applied straight away
-    });
-    dlg.addEventListener('close', () => finish(cur), { once: true });
-    dlg.showModal();
-  });
-}
-const iconButton = (btn, get, set) => {
-  const paint = () => btn.replaceChildren(iconNode(get(), '🔑'));
-  paint();
-  btn.onclick = async () => { set(await pickIcon(get())); paint(); };
-};
-
-// ---------- entry dialog ----------
-// ---------- password generator dialog ----------
-const GEN_KEY = 'kyuch.gen', MAX_MULTI = 30;
-function genPrefs() {
-  const d = { length: 20, lower: true, upper: true, digits: true, symbols: true, symbolSet: Gen.DEFAULT_SYMBOLS, noAmbiguous: false, multi: false, count: 5 };
-  try { return { ...d, ...JSON.parse(localStorage.getItem(GEN_KEY) || '{}') }; } catch { return d; }
-}
-const clampCount = (v) => Math.min(MAX_MULTI, Math.max(2, Math.round(+v) || 5));
-function wireGenerator() {
-  const el = (id) => $(id);
-  let useMode = false, current = []; // current = what is on screen, so Copy all matches it exactly
-  const read = () => ({ length: +el('gLenN').value || 20, lower: el('gLower').checked, upper: el('gUpper').checked, digits: el('gDigits').checked,
-    symbols: el('gSymbols').checked, symbolSet: el('gSyms').value, noAmbiguous: el('gAmbig').checked, multi: el('gMulti').checked, count: clampCount(el('gCount').value) });
-  const copyText = (text, msg) => act(async () => { if (text) { await call('clip:copy', { text }); toast(msg); } });
-  const row = (pw) => h('div', { class: 'genrow' },
-    h('input', { class: 'mono', readonly: true, value: pw, 'aria-label': 'Generated password' }),
-    h('button', { type: 'button', onclick: () => copyText(pw, 'Password copied') }, 'Copy'),
-    useMode ? h('button', { type: 'button', class: 'primary', onclick: () => { el('gOut').value = pw; el('genDlg').close('ok'); } }, 'Use') : null);
-  const regen = () => {
-    const o = read();
-    el('gCountWrap').hidden = !o.multi; el('gList').hidden = !o.multi; el('gOut').hidden = o.multi;
-    el('gCopy').textContent = o.multi ? 'Copy all' : 'Copy';
-    el('gUse').hidden = !useMode || o.multi; // in multi mode every row has its own Use button
-    current = [];
-    try {
-      current = Array.from({ length: o.multi ? o.count : 1 }, () => Gen.generate(o)); el('gErr').textContent = '';
-      try { localStorage.setItem(GEN_KEY, JSON.stringify(o)); } catch { /* prefs are optional */ }
-    } catch (e) { el('gErr').textContent = e.message; }
-    el('gOut').value = o.multi ? '' : (current[0] || '');
-    el('gList').replaceChildren(...(o.multi ? current.map(row) : []));
-    const bits = current.length ? Gen.entropy(o) : 0;
-    el('gMeter').value = bits; el('gInfo').textContent = current.length ? `${Gen.label(bits)} · ${bits} bits each` : '';
-  };
-  const sync = (from, to) => el(from).addEventListener('input', () => { el(to).value = el(from).value; regen(); });
-  sync('gLen', 'gLenN'); sync('gLenN', 'gLen');
-  for (const id of ['gLower', 'gUpper', 'gDigits', 'gSymbols', 'gSyms', 'gAmbig', 'gMulti', 'gCount']) el(id).addEventListener('input', regen);
-  // On blur just tidy the number (99 -> 30). Do NOT regenerate: the list already used the clamped count, and a regen here
-  // would swap the rows out from under a click on a row's Copy/Use button.
-  el('gCount').addEventListener('change', () => { el('gCount').value = clampCount(el('gCount').value); });
-  el('gRegen').onclick = regen;
-  el('gCopy').onclick = () => copyText(current.join('\n'), current.length > 1 ? `${current.length} passwords copied` : 'Password copied');
-  return {
-    open(useButton) {
-      const p = genPrefs();
-      useMode = useButton;
-      el('gLen').value = el('gLenN').value = p.length;
-      el('gLower').checked = p.lower; el('gUpper').checked = p.upper; el('gDigits').checked = p.digits; el('gSymbols').checked = p.symbols;
-      el('gSyms').value = p.symbolSet; el('gAmbig').checked = p.noAmbiguous; el('gMulti').checked = p.multi; el('gCount').value = clampCount(p.count);
-      regen();
-    },
-    wipe() { current = []; el('gOut').value = ''; el('gList').replaceChildren(); },
-  };
-}
-let genCtl = null;
-// Resolves with the password if one was chosen ("Use password" / a row's Use), otherwise null. Everything is wiped afterwards.
-async function openGenerator(useButton) {
-  genCtl ??= wireGenerator();
-  genCtl.open(useButton);
-  const ok = await show($('genDlg'));
-  const pw = ok ? $('gOut').value : null;
-  genCtl.wipe();
-  return pw;
-}
-$('btnGen').onclick = () => openGenerator(false);
-
-// ---------- one-time password (TOTP) tab ----------
-const fmtCode = (c) => { const k = Math.ceil(c.length / 2); return c.slice(0, k) + ' ' + c.slice(k); }; // 123456 -> 123 456
-let otpState = { uri: '', bad: false }, otpSeq = 0, otpExpires = 0, otpDlgTimer = null, otpWasLink = false, otpTouched = false;
-
-function setTab(name) {
-  const otp = name === 'otp';
-  $('panelDetails').hidden = otp; $('panelOtp').hidden = !otp;
-  $('tabBtnDetails').setAttribute('aria-selected', String(!otp)); $('tabBtnOtp').setAttribute('aria-selected', String(otp));
-}
-$('tabBtnDetails').onclick = () => setTab('details');
-$('tabBtnOtp').onclick = () => { setTab('otp'); $('oSecret').focus(); };
-$('oShow').onclick = () => { const hidden = $('oSecret').type === 'password'; $('oSecret').type = hidden ? 'text' : 'password'; $('oShow').textContent = hidden ? 'Hide' : 'Show'; };
-
-async function otpPreview() {
-  const mine = ++otpSeq, input = $('oSecret').value.trim();
-  const isLink = /^otpauth:/i.test(input);
-  if (otpWasLink && !isLink) { $('oDigits').value = '6'; $('oPeriod').value = '30'; $('oAlg').value = 'SHA1'; } // link replaced by a bare secret: back to defaults
-  otpWasLink = isLink;
-  for (const id of ['oDigits', 'oPeriod', 'oAlg']) $(id).disabled = isLink; // a pasted link carries its own settings
-  if (!input) { otpState = { uri: '', bad: false }; $('oBox').hidden = true; $('oErr').textContent = ''; return; }
-  try {
-    const r = await call('otp:preview', { input, digits: $('oDigits').value, period: $('oPeriod').value, algorithm: $('oAlg').value });
-    if (mine !== otpSeq) return; // a newer keystroke already superseded this answer
-    otpState = { uri: r.uri, bad: false }; $('oErr').textContent = '';
-    $('oDigits').value = r.digits; $('oPeriod').value = r.period; $('oAlg').value = r.algorithm;
-    $('oBox').hidden = false; $('oCode').textContent = fmtCode(r.code); $('oBar').max = r.period; otpExpires = r.validUntil; tickOtp();
-  } catch (e) {
-    if (mine !== otpSeq) return;
-    otpState = { uri: '', bad: true }; $('oBox').hidden = true; $('oErr').textContent = e.message;
-  }
-}
-function tickOtp() {
-  if (!otpState.uri) return;
-  const left = Math.max(0, (otpExpires - Date.now()) / 1000);
-  $('oBar').value = left; $('oInfo').textContent = `New code in ${Math.ceil(left)} s`;
-  if (left <= 0) { otpExpires = Infinity; otpPreview(); } // next time window: fetch the next code once
-}
-for (const id of ['oSecret', 'oDigits', 'oPeriod', 'oAlg']) $(id).addEventListener('input', () => { otpTouched = true; otpPreview(); });
-$('oCopy').onclick = () => act(async () => { await call('clip:copy', { text: $('oCode').textContent.replace(' ', '') }); toast('One-time password copied'); });
-// An unusable one-time password must not be saved silently: keep the dialog open and show the problem.
-$('entryForm').addEventListener('submit', (e) => {
-  // (stored data we cannot read, e.g. a Steam link, is left exactly as it is unless the user touches this tab)
-  if (e.submitter?.value === 'ok' && otpState.bad && otpTouched) { e.preventDefault(); setTab('otp'); toast('Fix the one-time password, or clear that field', true); }
-});
-
-async function editEntry(id) {
-  const base = id ? await act(() => call('entry:get', { id })) : { title: '', username: '', password: '', url: '', notes: '', icon: 0, tags: [], autoType: true, autoTypeSeq: '', otp: '' };
-  if (!base || $('entryDlg').open) return;
-  const groupId = id ? entries.get(id).g.id : selGroup, g = groups.get(groupId).g;
-  let ico = { icon: base.icon, customIcon: base.customIcon ?? null };
-  $('entryDlgTitle').textContent = id ? 'Edit entry' : 'New entry';
-  iconButton($('eIcon'), () => ico, (v) => (ico = v));
-  $('eTitle').value = base.title; $('eUser').value = base.username; $('ePass').value = base.password; $('ePass').type = 'password'; $('eShow').textContent = 'Show';
-  $('eUrl').value = base.url; $('eNotes').value = base.notes; $('eTags').value = base.tags.join(', ');
-  $('eAuto').checked = base.autoType; $('eSeq').value = base.autoTypeSeq;
-  const inh = g.effective.autoTypeSeq;
-  $('eSeq').placeholder = `Inherit: ${inh.value}${inh.from ? ` (from ${inh.from})` : ''}`;
-  $('eShow').onclick = () => { const hidden = $('ePass').type === 'password'; $('ePass').type = hidden ? 'text' : 'password'; $('eShow').textContent = hidden ? 'Hide' : 'Show'; };
-  $('eGen').onclick = async () => { const pw = await openGenerator(true); if (pw) { $('ePass').value = pw; $('ePass').type = 'text'; $('eShow').textContent = 'Hide'; } };
-  setTab('details');
-  $('oSecret').value = base.otp || ''; $('oSecret').type = 'password'; $('oShow').textContent = 'Show';
-  $('oDigits').value = '6'; $('oPeriod').value = '30'; $('oAlg').value = 'SHA1'; $('oBox').hidden = true; $('oErr').textContent = '';
-  otpTouched = false; otpState = { uri: base.otp || '', bad: false }; otpSeq++; otpWasLink = /^otpauth:/i.test(base.otp || '');
-  if (base.otp) otpPreview(); else for (const k of ['oDigits', 'oPeriod', 'oAlg']) $(k).disabled = false;
-  clearInterval(otpDlgTimer); otpDlgTimer = setInterval(tickOtp, 500);
-  const saved = await show($('entryDlg'));
-  clearInterval(otpDlgTimer);
-  const otp = otpState.uri, otpUntouched = !otpTouched; // an untouched link (Steam, extra parameters...) is saved exactly as stored
-  $('oSecret').value = ''; $('oCode').textContent = ''; $('oBox').hidden = true; // the secret does not linger in the page
-  if (!saved) return;
-  const p = {
-    title: $('eTitle').value, username: $('eUser').value, password: $('ePass').value, url: $('eUrl').value.trim(), notes: $('eNotes').value, icon: ico.icon, customIcon: ico.customIcon,
-    tags: $('eTags').value.split(',').map((t) => t.trim()).filter(Boolean), autoType: $('eAuto').checked, autoTypeSeq: $('eSeq').value.trim(), ...(otpUntouched ? {} : { otp }),
-  };
-  update(id ? 'entry:update' : 'entry:add', id ? { id, ...p } : { groupId, ...p });
-}
-
-// ---------- folder dialog (settings inherit from the parent folder) ----------
-function editFolder(id, parentId) {
-  if ($('folderDlg').open) return;
-  const g = id ? groups.get(id).g : null;
-  const parent = id ? groups.get(id).parent : groups.get(parentId).g;
-  const inherited = (k) => parent ? parent.effective[k] : { value: S.defaults[k], from: null };
-  const label = (k, fmt = (v) => v) => { const i = inherited(k); return `Inherit: ${fmt(i.value)} (${i.from ? 'from ' + i.from : 'default'})`; };
-  const tri = (sel, k) => {
-    const raw = g?.raw[k] ?? null;
-    sel.replaceChildren(h('option', { value: '' }, label(k, yn)), h('option', { value: 'true' }, 'Yes'), h('option', { value: 'false' }, 'No'));
-    sel.value = raw === null ? '' : String(raw);
-  };
-  let ico = { icon: g ? g.icon : 48, customIcon: g?.customIcon ?? null };
-  $('folderDlgTitle').textContent = g ? 'Folder settings' : 'New folder';
-  iconButton($('fIcon'), () => ico, (v) => (ico = v));
-  $('fName').value = g ? g.name : ''; $('fNotes').value = g ? g.notes : '';
-  tri($('sAuto'), 'autoType'); tri($('sSearch'), 'searching');
-  for (const [el, k] of [[$('sSeq'), 'autoTypeSeq'], [$('sClip'), 'clipboardClear'], [$('sDelay'), 'typeDelay']]) {
-    el.value = g?.raw[k] ?? ''; el.placeholder = label(k); el.disabled = S.legacy && k !== 'autoTypeSeq';
-  }
-  $('sNote').textContent = S.legacy ? 'Clipboard and keystroke settings need KDBX4 (this database is KDBX3).' : '';
-  show($('folderDlg')).then((ok) => {
-    if (!ok) return;
-    const num = (el) => (el.value === '' ? null : Number(el.value));
-    const tv = (el) => (el.value === '' ? null : el.value === 'true');
-    const settings = { autoType: tv($('sAuto')), searching: tv($('sSearch')), autoTypeSeq: $('sSeq').value.trim() };
-    if (!S.legacy) Object.assign(settings, { clipboardClear: num($('sClip')), typeDelay: num($('sDelay')) });
-    const p = { name: $('fName').value, notes: $('fNotes').value, icon: ico.icon, customIcon: ico.customIcon, settings };
-    if (g) update('group:update', { id: g.id, ...p }); else { expanded.add(parentId); update('group:add', { parentId, ...p }); }
-  });
-}
+// New/edit entry and folder open in their own popup window (see editor.js); the result comes back as a state:changed event.
+const editEntry = (id) => act(() => call('editor:open', { kind: 'entry', id: id || undefined, groupId: id ? undefined : selGroup }));
+const editFolder = (id, parentId) => act(() => call('editor:open', { kind: 'folder', id: id || undefined, parentId: id ? undefined : parentId }));
+kyuch.onStateChanged((s) => { if (selGroup) expanded.add(selGroup); applyState(s); }); // a new folder is created inside the selected one: show it
+kyuch.onActivity(() => { if (S) armIdle(); }); // typing in an editor window counts as activity for the idle auto-lock
 
 // ---------- settings dialog ----------
 async function appSettings() {

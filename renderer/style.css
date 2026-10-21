@@ -138,3 +138,18 @@ body[data-locked] .needs-db { display: none !important; }
 .recentrow .grow { flex: 1 1 auto; min-width: 0; width: auto; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recentrow .trash { flex: none; width: 38px; display: grid; place-items: center; padding: 0; } .recentrow .trash:hover { color: var(--danger); }
 .stack { display: grid; gap: 10px; }
+
+/* editor popup windows (entry / folder) */
+body.editor { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; }
+#edTop { display: flex; align-items: center; justify-content: space-between; height: 38px; padding: 0 8px 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
+#edTop button { -webkit-app-region: no-drag; }
+.edtitle { font-weight: 600; }
+.xbtn { width: 24px; height: 24px; padding: 0; border-radius: 50%; background: transparent; display: grid; place-items: center; }
+.xbtn:hover { background: rgba(128, 128, 128, .34); }
+#edMain { overflow: auto; padding: 16px; }
+.edform { display: grid; gap: 10px; }
+.edform label { display: grid; gap: 3px; color: var(--muted); font-size: 12px; } .edform label.check { display: flex; gap: 6px; align-items: center; }
+.edform .panel { min-height: 300px; }
+#edFoot { padding: 8px 16px 14px; border-top: 1px solid var(--line); display: grid; gap: 4px; }
+#edFoot .error { margin: 0; min-height: 1.2em; }
+.edbar { display: flex; justify-content: flex-end; gap: 8px; }

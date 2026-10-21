@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('kyuch', {
   onUpdateAvailable: (cb) => ipcRenderer.on('update:available', (_e, u) => cb(u)),
   onAutoLock: (cb) => ipcRenderer.on('app:autolock', () => cb()),
   onLocked: (cb) => ipcRenderer.on('app:locked', () => cb()),
+  onStateChanged: (cb) => ipcRenderer.on('state:changed', (_e, s) => cb(s)),
+  onActivity: (cb) => ipcRenderer.on('app:activity', () => cb()),
   call: async (channel, arg) => {
     const r = await ipcRenderer.invoke(channel, arg);
     if (!r.ok) throw new Error(r.error);

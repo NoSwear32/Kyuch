@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kyuch</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="editor">
+
+<header id="edTop">
+  <span id="edTitle" class="edtitle">Kyuch</span>
+  <button id="edX" class="xbtn" title="Close (Esc)" aria-label="Close"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3L3 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+</header>
+
+<main id="edMain">
+  <form id="entryForm" class="edform" hidden>
+
+    <div class="row"><button type="button" id="eIcon" class="iconbtn" title="Choose an icon"></button><input id="eTitle" placeholder="Title" required></div>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="tabBtnDetails" aria-selected="true" aria-controls="panelDetails">Details</button>
+      <button type="button" role="tab" id="tabBtnOtp" aria-selected="false" aria-controls="panelOtp">One-time password</button>
+    </div>
+    <div id="panelDetails" role="tabpanel" class="panel">
+      <label>Username <input id="eUser" autocomplete="off"></label>
+      <label>Password
+        <span class="row">
+          <input id="ePass" type="password" autocomplete="off">
+          <button type="button" id="eShow">Show</button>
+          <button type="button" id="eGen" title="Open the password generator">Generate</button>
+        </span>
+      </label>
+      <label>URL <input id="eUrl" placeholder="https://"></label>
+      <label>Comments <textarea id="eNotes" rows="4"></textarea></label>
+      <label>Tags <input id="eTags" placeholder="comma separated"></label>
+      <fieldset>
+        <legend>Auto-type</legend>
+        <label class="check"><input type="checkbox" id="eAuto"> Enabled for this entry</label>
+        <label>Sequence <input id="eSeq"></label>
+        <small class="muted">Placeholders: {USERNAME} {PASSWORD} {OTP} {URL} {TITLE} {NOTES} {TAB} {ENTER} {SPACE} {DELAY 500}. Every auto-type starts with Alt+Tab (switches to the previous window).</small>
+      </fieldset>
+    </div>
+    <div id="panelOtp" role="tabpanel" class="panel" hidden>
+      <p class="muted">Time-based one-time passwords (TOTP), like Google Authenticator. Paste the secret key, or the otpauth:// link, from the service's two-factor setup page.</p>
+      <label>Secret key or otpauth:// link
+        <span class="row"><input id="oSecret" type="password" autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP"><button type="button" id="oShow">Show</button></span>
+      </label>
+      <div class="cols3">
+        <label>Digits <select id="oDigits"><option>6</option><option>7</option><option>8</option></select></label>
+        <label>Period (seconds) <input id="oPeriod" type="number" min="5" max="300" value="30"></label>
+        <label>Algorithm <select id="oAlg"><option>SHA1</option><option>SHA256</option><option>SHA512</option></select></label>
+      </div>
+      <div id="oBox" class="otpbox" hidden>
+        <output id="oCode" class="otpcode mono" aria-live="off"></output>
+        <progress id="oBar" max="30" value="30"></progress>
+        <div class="row between"><small id="oInfo" class="muted"></small><button type="button" id="oCopy">Copy code</button></div>
+      </div>
+      <p class="error" id="oErr"></p>
+    </div>
+  </form>
+  <form id="folderForm" class="edform" hidden>
+
+    <div class="row"><button type="button" id="fIcon" class="iconbtn" title="Choose an icon"></button><input id="fName" placeholder="Name" required></div>
+    <label>Comments <textarea id="fNotes" rows="2"></textarea></label>
+    <fieldset>
+      <legend>Settings <small class="muted">— empty / "Inherit" uses the parent folder's value</small></legend>
+      <label>Auto-type <select id="sAuto"></select></label>
+      <label>Included in search <select id="sSearch"></select></label>
+      <label>Auto-type sequence <input id="sSeq"></label>
+      <label>Clear clipboard after (seconds, 0 = never) <input id="sClip" type="number" min="0"></label>
+      <label>Keystroke delay (ms) <input id="sDelay" type="number" min="0"></label>
+      <small class="muted" id="sNote"></small>
+    </fieldset>
+  </form>
+</main>
+
+<footer id="edFoot">
+  <p class="error" id="edErr" role="alert"></p>
+  <div class="edbar"><button type="button" id="edCancel">Cancel</button><button type="submit" id="edSave" class="primary">Save</button></div>
+</footer>
+
+<dialog id="iconDlg">
+  <form method="dialog" id="iconForm">
+    <h2>Choose an icon</h2>
+    <div id="iconGrid"></div>
+    <div class="row between"><strong>Your icons</strong><button type="button" id="iconAdd">Add icon…</button></div>
+    <div id="customGrid"></div>
+    <small class="muted">PNG or JPEG. Icons are cropped to a square, shrunk to 64 px and stored inside the database.</small>
+    <menu><button value="cancel" formnovalidate id="iconClose">Cancel</button></menu>
+  </form>
+</dialog>
+
+<div id="toast" hidden></div>
+<script src="themes.js"></script>
+<script src="icons.js"></script>
+<script src="gen.js"></script>
+<script src="common.js"></script>
+<script src="generator.js"></script>
+<script src="editor.js"></script>
+</body>
+</html>

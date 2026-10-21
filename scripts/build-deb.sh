@@ -21,7 +21,7 @@ find "$OPT/locales" -name '*.pak' ! -name 'en-US.pak' ! -name 'en-GB.pak' ! -nam
 
 # 2. The app + production-only node_modules
 mkdir -p "$APP"
-cp -a main.js preload.js core.js argon2-worker.js totp.js autotype.js updater.js update-key.pub uinput_type.py icon.png package.json package-lock.json renderer "$APP/"
+cp -a main.js preload.js core.js argon2-worker.js totp.js browsers.js autotype.js updater.js update-key.pub uinput_type.py icon.png package.json package-lock.json renderer "$APP/"
 (cd "$APP" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null && rm -f package-lock.json)
 
 # 3. Launcher, desktop entry, icons, udev rule, docs

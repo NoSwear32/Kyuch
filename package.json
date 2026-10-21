@@ -1,6 +1,6 @@
 {
   "name": "kyuch",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Kyuch - a KeePass-compatible password manager",
   "main": "main.js",
   "scripts": {
@@ -38,6 +38,7 @@
       "preload.js",
       "core.js",
       "totp.js",
+      "browsers.js",
       "argon2-worker.js",
       "autotype.js",
       "updater.js",

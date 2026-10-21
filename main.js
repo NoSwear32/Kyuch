@@ -1,7 +1,7 @@
 const { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Vault, DEFAULTS } = require('./core');
+const { Vault, DEFAULTS, resolveAll } = require('./core');
 const autotype = require('./autotype');
 const { createUpdater } = require('./updater');
 const totp = require('./totp');
@@ -77,7 +77,7 @@ const state = () => vault && {
 async function lockVault(auto) {
   if (auto && vault?.dirty) { try { await vault.save(); } catch { /* fall back to the prompt below */ } }
   if (!(await canLeave())) return false;
-  clearClipboard();
+  clearClipboard(); closeEditors(); // an open editor holds plaintext passwords
   vault = null;
   return true;
 }
@@ -102,6 +102,7 @@ function ensureTray() {
 }
 function dropTray() { if (tray && !tray.isDestroyed()) tray.destroy(); tray = null; }
 async function hideToTray() {
+  closeEditors();
   if (cfg.lockOnTray && vault) { if (!(await lockVault(false))) return; win.webContents.send('app:locked'); } // a hidden window must not hold an open vault
   win.hide();
 }
@@ -202,16 +203,44 @@ const handlers = {
   'app:relaunch': async () => { if (await canLeave()) { clearClipboard(); app.relaunch(); app.exit(0); } },
 
   // custom icon: pick an image, crop to a square, shrink to 64px PNG so the database stays small
-  'icon:add': async () => {
-    const r = await dialog.showOpenDialog(win, { title: 'Choose an icon image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }], properties: ['openFile'] });
+  'icon:add': async (_a, e) => {
+    const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || win, { title: 'Choose an icon image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }], properties: ['openFile'] });
     if (r.canceled) return null;
     let img = nativeImage.createFromPath(r.filePaths[0]);
     if (img.isEmpty()) throw new Error('That file could not be read as a PNG or JPEG image');
     const { width, height } = img.getSize(), side = Math.min(width, height);
     img = img.crop({ x: Math.floor((width - side) / 2), y: Math.floor((height - side) / 2), width: side, height: side }).resize({ width: 64, height: 64, quality: 'best' });
     const id = vault.addIcon(img.toPNG(), path.basename(r.filePaths[0]));
-    return { ...state(), newIcon: id };
+    const s = state();
+    win?.webContents.send('state:changed', s); // the main window's icon list is now stale too
+    return { ...s, newIcon: id };
   },
+
+  // ---- editor popup windows ----
+  'editor:open': ({ kind, id, groupId, parentId }) => {
+    if (kind !== 'entry' && kind !== 'folder') throw new Error('Unknown editor');
+    openEditor({ kind, id: id || null, groupId: groupId || null, parentId: parentId || null });
+  },
+  'editor:init': (_a, e) => {
+    const c = ctxOf(e);
+    const base = { kind: c.kind, id: c.id, cfg, icons: vault.icons(), legacy: vault.legacy, defaults: DEFAULTS };
+    if (c.kind === 'entry') {
+      const group = c.id ? vault.entry(c.id).parentGroup : vault.group(c.groupId);
+      return { ...base, groupId: group.uuid.id, entry: c.id ? vault.getEntry(c.id) : null, inheritedSeq: resolveAll(group).autoTypeSeq };
+    }
+    const g = c.id ? vault.group(c.id) : null, parent = g ? g.parentGroup : vault.group(c.parentId);
+    return { ...base, parentId: parent?.uuid.id ?? null, g: g ? findNode(vault.tree(), c.id) : null, parentEff: parent ? resolveAll(parent) : null };
+  },
+  'editor:save': ({ props }, e) => {
+    const c = ctxOf(e), w = BrowserWindow.fromWebContents(e.sender);
+    if (c.kind === 'entry') { if (c.id) vault.updateEntry(c.id, props); else vault.addEntry(c.groupId || vault.root.uuid.id, props); }
+    else if (c.id) vault.updateGroup(c.id, props); else vault.addGroup(c.parentId || vault.root.uuid.id, props);
+    win?.webContents.send('state:changed', state());
+    setImmediate(() => w && !w.isDestroyed() && w.close());       // after this reply has been delivered
+    return true;
+  },
+  'editor:close': (_a, e) => { const w = BrowserWindow.fromWebContents(e.sender); if (w && editorCtx.has(e.sender.id)) w.close(); },
+  'app:activity': (_a, e) => { if (editorCtx.has(e.sender.id)) win?.webContents.send('app:activity'); },
 
   'pick:new': async () => {
     const r = await dialog.showSaveDialog(win, { title: 'New database', defaultPath: 'passwords.kdbx', filters });
@@ -312,11 +341,11 @@ const handlers = {
   },
 };
 // Anything that touches the open database: refuse cleanly when it has been locked in the meantime (e.g. Save then Lock in quick succession).
-const NEEDS_VAULT = /^(group:|entry:|move$|db:save|db:changePassword|icon:add)/;
+const NEEDS_VAULT = /^(group:|entry:|editor:|move$|db:save|db:changePassword|icon:add)/;
 for (const [ch, fn] of Object.entries(handlers)) {
   ipcMain.handle(ch, async (_e, arg) => {
     try {
-      if (NEEDS_VAULT.test(ch) && !vault) throw new Error('The database is locked'); return { ok: true, data: await fn(arg) }; } catch (e) { return { ok: false, error: e.message }; }
+      if (NEEDS_VAULT.test(ch) && !vault) throw new Error('The database is locked'); return { ok: true, data: await fn(arg, _e) }; } catch (e) { return { ok: false, error: e.message }; }
   });
 }
 
@@ -334,6 +363,45 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
 
+// Every window (main and editor popups) gets the same locked-down settings.
+const webPrefs = () => ({
+  preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false,
+  devTools: !app.isPackaged,   // no inspector on an installed build
+  spellcheck: false,           // spellcheck would see what is typed in password fields (and may fetch dictionaries online)
+  webviewTag: false, allowRunningInsecureContent: false,
+});
+function hardenWindow(w) {
+  w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  w.webContents.on('will-navigate', (e) => e.preventDefault());
+  w.webContents.on('will-attach-webview', (e) => e.preventDefault());
+}
+
+// ---- editor popup windows: New/Edit entry and folder each open in a window of their own ----
+let editor = null;                 // the one open editor window (modal over the main window)
+const editorCtx = new Map();       // webContents id -> what that window edits; only these windows may call editor:init / editor:save
+function openEditor(ctx) {
+  if (!vault) throw new Error('The database is locked');
+  if (ctx.kind === 'entry' && ctx.id) vault.entry(ctx.id);       // throws if it does not exist
+  if (ctx.kind === 'folder' && ctx.id) vault.group(ctx.id);
+  if (editor && !editor.isDestroyed()) { editor.focus(); return; }
+  const size = ctx.kind === 'entry' ? { width: 640, height: 800 } : { width: 600, height: 720 };
+  const pb = win.getBounds();
+  const w = new BrowserWindow({
+    ...size, minWidth: 520, minHeight: 520, x: Math.max(0, Math.round(pb.x + (pb.width - size.width) / 2)), y: Math.max(0, Math.round(pb.y + (pb.height - size.height) / 2)),
+    parent: win, modal: true, frame: false, show: false, skipTaskbar: true, minimizable: false, maximizable: false,
+    title: 'Kyuch', icon: path.join(__dirname, 'icon.png'), backgroundColor: '#1b1d22', webPreferences: webPrefs(),
+  });
+  hardenWindow(w);
+  const id = w.webContents.id;
+  editorCtx.set(id, ctx); editor = w;
+  w.once('ready-to-show', () => w.show());
+  w.on('closed', () => { editorCtx.delete(id); if (editor === w) editor = null; });
+  w.loadFile('renderer/editor.html');
+}
+const closeEditors = () => { if (editor && !editor.isDestroyed()) editor.close(); };
+const ctxOf = (e) => { const c = editorCtx.get(e.sender.id); if (!c || !vault) throw new Error('This window is no longer needed'); return c; };
+const findNode = (n, id) => (n.id === id ? n : n.groups.reduce((f, c) => f || findNode(c, id), null));
+
 if (gotLock) app.whenReady().then(() => {
   if (process.platform === 'win32') app.setAppUserModelId('com.noswear.kyuch'); // taskbar grouping and icon
   Menu.setApplicationMenu(null);
@@ -343,17 +411,10 @@ if (gotLock) app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler(() => false);
   win = new BrowserWindow({
     width: 1100, height: 700, minWidth: 760, minHeight: 480, frame: false, title: 'Kyuch', icon: path.join(__dirname, 'icon.png'), backgroundColor: '#1b1d22',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false,
-      devTools: !app.isPackaged,   // no inspector on an installed build
-      spellcheck: false,           // spellcheck would see what is typed in password fields (and may fetch dictionaries online)
-      webviewTag: false, allowRunningInsecureContent: false,
-    },
+    webPreferences: webPrefs(),
   });
   for (const ev of ['maximize', 'unmaximize']) win.on(ev, () => win.webContents.send('win:state', win.isMaximized()));
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', (e) => e.preventDefault());
-  win.webContents.on('will-attach-webview', (e) => e.preventDefault());
+  hardenWindow(win);
   for (const ev of ['suspend', 'lock-screen']) powerMonitor.on(ev, () => win?.webContents.send('app:autolock')); // a sleeping/locked machine must not leave the vault open
   if (cfg.closeToTray) ensureTray();
   win.on('close', async (e) => {

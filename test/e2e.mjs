@@ -40,6 +40,20 @@ await page.evaluate(() => { window.__confirms = []; window.confirm = (m) => { wi
 const confirms = () => page.evaluate(() => window.__confirms);
 const errs = []; page.on('pageerror', (e) => errs.push(e.message)); page.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
 const shot = async (n) => { const b = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')); fs.writeFileSync(`${T}/${n}.png`, Buffer.from(b, 'base64')); };
+const shotEditor = async (n) => { const b = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('editor.html')).webContents.capturePage()).toPNG().toString('base64')); fs.writeFileSync(`${T}/${n}.png`, Buffer.from(b, 'base64')); };
+// The entry/folder editors are separate popup windows. These helpers open one and hand back that window's page.
+const openEditor = async (action) => {
+  const [pop] = await Promise.all([app.waitForEvent('window'), action()]);
+  await pop.waitForSelector('#entryForm:not([hidden]), #folderForm:not([hidden])');
+  return pop;
+};
+const addEntryWin = () => openEditor(async () => { await page.click('#btnAdd'); await page.click('#addEntry'); });
+const addFolderWin = () => openEditor(async () => { await page.click('#btnAdd'); await page.click('#addFolder'); });
+const editEntryWin = () => openEditor(() => page.click('#detail button:has-text("Edit")'));
+const closeWin = async (pop, selector) => { const closed = pop.waitForEvent('close'); await pop.click(selector); await closed; await page.waitForTimeout(200); };
+const saveWin = (pop) => closeWin(pop, '#edSave');
+const cancelWin = (pop) => closeWin(pop, '#edCancel');
+const rowsOf = (p) => p.evaluate(() => [...document.querySelectorAll('#gList .genrow input')].map((i) => i.value));
 const ok = (c, m) => { if (!c) throw new Error('FAIL: ' + m); console.log('ok:', m); };
 
 await page.click('#btnNewDb');
@@ -48,18 +62,21 @@ await page.waitForSelector('#app:not([hidden])');
 ok(true, 'database created and app shown');
 
 // folder with settings, then nested folder inheriting
-await page.click('#btnAdd'); await page.click('#addFolder'); await page.fill('#fName', 'Work'); await page.selectOption('#sAuto', 'true'); await page.fill('#sSeq', '{PASSWORD}{ENTER}'); await page.fill('#sClip', '30');
-await page.click('#folderForm button.primary');
+const wWork = await addFolderWin();
+await wWork.fill('#fName', 'Work'); await wWork.selectOption('#sAuto', 'true'); await wWork.fill('#sSeq', '{PASSWORD}{ENTER}'); await wWork.fill('#sClip', '30');
+await saveWin(wWork);
 await page.click('.node:has-text("Work")');
-await page.click('#btnAdd'); await page.click('#addFolder'); await page.fill('#fName', 'Deep'); await page.waitForTimeout(100);
-ok((await page.getAttribute('#sSeq', 'placeholder')).includes('{PASSWORD}{ENTER}') && (await page.getAttribute('#sSeq', 'placeholder')).includes('Work'), 'child placeholder shows inherited sequence + source');
-ok((await page.getAttribute('#sClip', 'placeholder')).includes('30'), 'child placeholder shows inherited clipboard time');
-await page.click('#folderForm button.primary');
+const wDeep = await addFolderWin(); await wDeep.fill('#fName', 'Deep'); await wDeep.waitForTimeout(100);
+ok((await wDeep.getAttribute('#sSeq', 'placeholder')).includes('{PASSWORD}{ENTER}') && (await wDeep.getAttribute('#sSeq', 'placeholder')).includes('Work'), 'child placeholder shows inherited sequence + source');
+ok((await wDeep.getAttribute('#sClip', 'placeholder')).includes('30'), 'child placeholder shows inherited clipboard time');
+await saveWin(wDeep);
 await page.click('.node:has-text("Deep")');
 
 // entry
-await page.click('#btnAdd'); await page.click('#addEntry'); await page.fill('#eTitle', 'GitHub'); await page.fill('#eUser', 'octo'); await page.fill('#ePass', 's3cret!'); await page.fill('#eUrl', 'github.com'); await page.fill('#eNotes', 'my comment');
-await page.click('#entryForm button.primary');
+const wGit = await addEntryWin();
+ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)) === 2 && await page.evaluate(() => !document.getElementById('entryForm')), 'New entry opens in a window of its own, not inside the main window');
+await wGit.fill('#eTitle', 'GitHub'); await wGit.fill('#eUser', 'octo'); await wGit.fill('#ePass', 's3cret!'); await wGit.fill('#eUrl', 'github.com'); await wGit.fill('#eNotes', 'my comment');
+await saveWin(wGit);
 await page.waitForSelector('tbody tr');
 await page.click('tbody tr');
 const det = await page.textContent('#detail');
@@ -98,10 +115,10 @@ ok((await page.textContent('#tree')).includes('Deep'), 'data persisted across lo
 ok(errs.length === 0, 'no renderer errors ' + errs.join('|'));
 // auto-lock with an open dialog and unsaved edits: must save, lock, and leave no dialog/password on screen
 await page.evaluate(async () => { await kyuch.call('group:add', { parentId: S.root.id, name: 'Dirty' }); });
-await page.click('#btnAdd'); await page.click('#addEntry'); await page.fill('#eTitle', 'Unsaved'); await page.fill('#ePass', 'plaintext-pw');
+const wLock = await addEntryWin(); await wLock.fill('#eTitle', 'Unsaved'); await wLock.fill('#ePass', 'plaintext-pw');
 await page.evaluate(() => lock(true));
-await page.waitForSelector('#lock:not([hidden])');
-ok(await page.evaluate(() => document.querySelectorAll('dialog[open]').length === 0 && document.getElementById('ePass').value === ''), 'lock closes dialogs and clears password fields');
+await page.waitForSelector('#lock:not([hidden])'); await page.waitForTimeout(500);
+ok(wLock.isClosed() && await page.evaluate(() => document.querySelectorAll('dialog[open]').length === 0), 'locking closes an open editor window (and the plaintext password in it) and any dialog');
 await page.click('#recent button'); await page.fill('#unlockPw', 'hunter2'); await page.press('#unlockPw', 'Enter');
 await page.waitForSelector('#app:not([hidden])');
 ok((await page.textContent('#tree')).includes('Dirty'), 'auto-lock saved unsaved edits before locking');
@@ -133,16 +150,16 @@ await page.click('#gRegen'); ok(JSON.stringify(await rows()) !== JSON.stringify(
 await page.uncheck('#gMulti');
 ok((await page.inputValue('#gOut')).length === 32 && !(await page.isVisible('#gList')), 'unchecking returns to a single password');
 await page.click('#genForm button[value=cancel]');
-await page.click('#btnAdd'); await page.click('#addEntry'); await page.click('#eGen'); const gp2 = await page.inputValue('#gOut'); await page.click('#gUse');
-ok((await page.inputValue('#ePass')) === gp2 && gp2.length === 32, 'Use password fills the entry form');
-ok((await page.inputValue('#gOut')) === '', 'generator output wiped after closing');
-await page.click('#eGen'); await page.check('#gMulti'); await page.fill('#gCount', '3');
-ok(!(await page.isVisible('#gUse')), 'single "Use password" button is replaced by per-row Use buttons');
-const pick = (await rows())[1]; await page.click('#gList .genrow:nth-child(2) button.primary');
-await page.waitForTimeout(250); // the wipe runs a tick after the dialog closes
-ok((await page.inputValue('#ePass')) === pick && (await page.evaluate(() => document.querySelectorAll('#gList .genrow').length)) === 0, 'a row\'s Use fills the entry form with exactly that password, then the list is wiped');
-await page.evaluate(() => localStorage.removeItem('kyuch.gen'));
-await page.click('#entryForm button[value=cancel]');
+const wGen = await addEntryWin(); await wGen.click('#eGen'); const gp2 = await wGen.inputValue('#gOut'); await wGen.click('#gUse');
+ok((await wGen.inputValue('#ePass')) === gp2 && gp2.length === 32, 'Use password fills the entry form');
+ok((await wGen.inputValue('#gOut')) === '', 'generator output wiped after closing');
+await wGen.click('#eGen'); await wGen.check('#gMulti'); await wGen.fill('#gCount', '3');
+ok(!(await wGen.isVisible('#gUse')), 'single "Use password" button is replaced by per-row Use buttons');
+const pick = (await rowsOf(wGen))[1]; await wGen.click('#gList .genrow:nth-child(2) button.primary');
+await wGen.waitForTimeout(250); // the wipe runs a tick after the dialog closes
+ok((await wGen.inputValue('#ePass')) === pick && (await wGen.evaluate(() => document.querySelectorAll('#gList .genrow').length)) === 0, 'a row\'s Use fills the entry form with exactly that password, then the list is wiped');
+await wGen.evaluate(() => localStorage.removeItem('kyuch.gen'));
+await cancelWin(wGen);
 const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 const setTheme = (theme) => page.evaluate((th) => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs: 500, theme: th }).then((c) => { S.cfg = c; applyTheme(c.theme); }), theme); // keep the page's saved settings in step, like the real controls do
 await setTheme('light'); const lightBg = await bg();
@@ -193,39 +210,39 @@ await page.evaluate(() => kyuch.call('cfg:set', { autoLockMin: 5, altTabDelayMs:
 // One-time password tab
 const totpMod = require(K + '/totp.js');
 const near = (input, digits) => [-30000, 0, 30000].map((d) => totpMod.code(totpMod.parse(input, { digits }), Date.now() + d).code); // tolerate a window rollover mid-test
-await page.click('#btnAdd'); await page.click('#addEntry'); await page.waitForSelector('#entryDlg[open]');
-await page.fill('#eTitle', 'OTP Site'); await page.fill('#ePass', 'pw-otp');
-ok(await page.isVisible('#tabBtnOtp') && await page.isVisible('#eUser') && !(await page.isVisible('#panelOtp')), 'entry dialog has a Details tab (active) and a One-time password tab');
-await page.click('#tabBtnOtp');
-ok(await page.isVisible('#panelOtp') && !(await page.isVisible('#eUser')), 'One-time password tab replaces the details fields');
-await page.fill('#oSecret', 'JBSWY3DPEHPK3PXP');
-await page.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
-const shown = (await page.textContent('#oCode')).replace(' ', '');
-await shot('otp'); ok(near('JBSWY3DPEHPK3PXP').includes(shown) && await page.isVisible('#oBar'), 'secret key shows the matching 6-digit code with a countdown: ' + shown);
-await page.fill('#oSecret', 'otpauth://totp/Ex:me?secret=JBSWY3DPEHPK3PXP&issuer=Ex&digits=8&period=60&algorithm=SHA256');
-await page.waitForFunction(() => document.getElementById('oCode').textContent.replace(' ', '').length === 8);
-const linkVals = await page.evaluate(() => [oDigits.value, oPeriod.value, oAlg.value, oDigits.disabled]);
+const wOtp = await addEntryWin();
+await wOtp.fill('#eTitle', 'OTP Site'); await wOtp.fill('#ePass', 'pw-otp');
+ok(await wOtp.isVisible('#tabBtnOtp') && await wOtp.isVisible('#eUser') && !(await wOtp.isVisible('#panelOtp')), 'entry editor has a Details tab (active) and a One-time password tab');
+await wOtp.click('#tabBtnOtp');
+ok(await wOtp.isVisible('#panelOtp') && !(await wOtp.isVisible('#eUser')), 'One-time password tab replaces the details fields');
+await wOtp.fill('#oSecret', 'JBSWY3DPEHPK3PXP');
+await wOtp.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
+const shown = (await wOtp.textContent('#oCode')).replace(' ', '');
+await shotEditor('otp'); ok(near('JBSWY3DPEHPK3PXP').includes(shown) && await wOtp.isVisible('#oBar'), 'secret key shows the matching 6-digit code with a countdown: ' + shown);
+await wOtp.fill('#oSecret', 'otpauth://totp/Ex:me?secret=JBSWY3DPEHPK3PXP&issuer=Ex&digits=8&period=60&algorithm=SHA256');
+await wOtp.waitForFunction(() => document.getElementById('oCode').textContent.replace(' ', '').length === 8);
+const linkVals = await wOtp.evaluate(() => [oDigits.value, oPeriod.value, oAlg.value, oDigits.disabled]);
 ok(JSON.stringify(linkVals) === JSON.stringify(['8', '60', 'SHA256', true]), 'a pasted otpauth:// link fills (and locks) digits, period and algorithm');
-await page.fill('#oSecret', '1!!');
-await page.waitForFunction(() => document.getElementById('oErr').textContent.length > 0);
-await page.click('#entryForm button.primary'); await page.waitForTimeout(300);
-ok(await page.evaluate(() => document.getElementById('entryDlg').open) && await page.isVisible('#panelOtp'), 'an invalid secret blocks saving and keeps the OTP tab open');
-await page.fill('#oSecret', 'JBSWY3DPEHPK3PXP');
-await page.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
-ok(JSON.stringify(await page.evaluate(() => [oDigits.value, oPeriod.value, oAlg.value, oDigits.disabled])) === JSON.stringify(['6', '30', 'SHA1', false]), 'replacing a link with a bare secret resets digits/period/algorithm to defaults');
-await page.click('#entryForm button.primary'); await page.waitForTimeout(400);
-ok(await page.evaluate(() => document.getElementById('oSecret').value === ''), 'secret field is cleared after the dialog closes');
+await wOtp.fill('#oSecret', '1!!');
+await wOtp.waitForFunction(() => document.getElementById('oErr').textContent.length > 0);
+await wOtp.click('#edSave'); await wOtp.waitForTimeout(300);
+ok(!wOtp.isClosed() && await wOtp.isVisible('#panelOtp'), 'an invalid secret blocks saving and keeps the OTP tab open');
+await wOtp.fill('#oSecret', 'JBSWY3DPEHPK3PXP');
+await wOtp.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
+ok(JSON.stringify(await wOtp.evaluate(() => [oDigits.value, oPeriod.value, oAlg.value, oDigits.disabled])) === JSON.stringify(['6', '30', 'SHA1', false]), 'replacing a link with a bare secret resets digits/period/algorithm to defaults');
+await saveWin(wOtp);
+ok(wOtp.isClosed(), 'the editor window, and the secret in it, is gone after saving');
 await page.click('tbody tr:has-text("OTP Site")');
 await page.waitForFunction(() => /^\d{3} \d{3}$/.test((document.querySelector('#detail .otpcode') || {}).textContent || ''));
 const dShown = (await page.textContent('#detail .otpcode')).replace(' ', '');
 ok((await page.textContent('#detail')).includes('One-time password') && near('JBSWY3DPEHPK3PXP').includes(dShown), 'detail pane shows the live code: ' + dShown);
 await page.click('#detail .field:has-text("One-time password") button'); await page.waitForTimeout(200);
 ok((await app.evaluate(({ clipboard }) => clipboard.readText())) === (await page.textContent('#detail .otpcode')).replace(' ', ''), 'Copy puts the current code (not the secret) on the clipboard');
-await page.click('#detail button:has-text("Edit")'); await page.waitForSelector('#entryDlg[open]'); await page.click('#tabBtnOtp');
-await page.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
-ok((await page.inputValue('#oSecret')).startsWith('otpauth://totp/') && (await page.inputValue('#oSecret')).includes('JBSWY3DPEHPK3PXP'), 'editing shows the stored otpauth:// link');
-await page.click('#entryForm button[value=cancel]'); await page.waitForTimeout(200);
-ok((await page.inputValue('#oSecret')) === '', 'cancel also wipes the secret from the page');
+const wEd = await editEntryWin(); await wEd.click('#tabBtnOtp');
+await wEd.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
+ok((await wEd.inputValue('#oSecret')).startsWith('otpauth://totp/') && (await wEd.inputValue('#oSecret')).includes('JBSWY3DPEHPK3PXP'), 'editing shows the stored otpauth:// link');
+await cancelWin(wEd);
+ok(wEd.isClosed(), 'cancel closes the editor window, taking the secret with it');
 
 // ---- fixes from the code review ----
 // keyboard navigation: the entry list and the folder tree work without a mouse, and focus survives re-rendering
@@ -252,8 +269,8 @@ await page.fill('#aNewPw', ''); await page.fill('#aNewPw2', ''); await page.clic
 // a stored OTP link the user did not touch is saved exactly as it was (extra parameters survive)
 const keepUri = 'otpauth://totp/X?secret=JBSWY3DPEHPK3PXP&extra=keepme&digits=7';
 const keepId = await page.evaluate(async (u) => { setState(await kyuch.call('entry:add', { groupId: S.root.id, title: 'KeepOtp', otp: u })); return [...entries.values()].find((x) => x.e.title === 'KeepOtp').e.id; }, keepUri);
-await page.click('.node:has-text("e2e")'); await page.click('tbody tr:has-text("KeepOtp")'); await page.click('#detail button:has-text("Edit")'); await page.waitForSelector('#entryDlg[open]');
-await page.fill('#eNotes', 'edited without touching the OTP tab'); await page.click('#entryForm button.primary'); await page.waitForTimeout(400);
+await page.click('.node:has-text("e2e")'); await page.click('tbody tr:has-text("KeepOtp")'); const wKeep = await editEntryWin();
+await wKeep.fill('#eNotes', 'edited without touching the OTP tab'); await saveWin(wKeep);
 const afterEdit = await page.evaluate((id) => kyuch.call('entry:get', { id }), keepId);
 ok(afterEdit.otp === keepUri && afterEdit.notes.startsWith('edited'), 'an untouched OTP link is saved exactly as stored');
 // pressing OK on an entry without changing anything adds no history
@@ -263,16 +280,26 @@ ok(afterEdit.otp === keepUri && afterEdit.notes.startsWith('edited'), 'an untouc
 // Add menu, icon picker Cancel, custom icon, window controls, About + update flow
 await page.click('#btnAdd'); ok(await page.isVisible('#addMenu') && (await page.textContent('#addMenu')).includes('Entry') && (await page.textContent('#addMenu')).includes('Folder'), 'Add button opens a menu with Entry and Folder');
 await shot('addmenu'); await page.keyboard.press('Escape'); ok(!(await page.isVisible('#addMenu')), 'Escape closes the Add menu');
-await page.click('#btnAdd'); await page.click('#addEntry'); await page.waitForSelector('#entryDlg[open]');
-await page.click('#eIcon'); await page.waitForSelector('#iconDlg[open]');
-await page.click('#iconClose'); await page.waitForTimeout(150);
-ok(!(await page.evaluate(() => document.getElementById('iconDlg').open)) && await page.evaluate(() => document.getElementById('entryDlg').open), 'icon picker Cancel closes it and keeps the entry dialog');
+const wI = await addEntryWin();
+await wI.click('#eIcon'); await wI.waitForSelector('#iconDlg[open]');
+await wI.click('#iconClose'); await wI.waitForTimeout(150);
+ok(!(await wI.evaluate(() => document.getElementById('iconDlg').open)) && !wI.isClosed(), 'icon picker Cancel closes it and keeps the editor window open');
 await app.evaluate(({ dialog }, f) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] }); }, K + '/brand/png/icon-64.png');
-await page.fill('#eTitle', 'Iconic'); await page.click('#eIcon'); await page.click('#iconAdd'); await page.waitForTimeout(400);
-ok(await page.evaluate(() => !document.getElementById('iconDlg').open && !!document.querySelector('#eIcon img.ico')), 'adding a custom icon applies it and shows it on the button');
-await page.click('#entryForm button.primary'); await page.waitForTimeout(300);
+await wI.fill('#eTitle', 'Iconic'); await wI.click('#eIcon'); await wI.click('#iconAdd'); await wI.waitForTimeout(400);
+ok(await wI.evaluate(() => !document.getElementById('iconDlg').open && !!document.querySelector('#eIcon img.ico')), 'adding a custom icon applies it and shows it on the button');
+await saveWin(wI);
 await page.click('tbody tr:has-text("Iconic")');
 ok(await page.evaluate(() => !!document.querySelector('#detail h2 img.ico') && !!document.querySelector('tbody tr.sel img.ico')), 'custom icon shown in the list and detail pane');
+// the editor window can be dismissed without saving, and the main page contains no editor forms any more
+const wEsc = await addEntryWin(); await wEsc.fill('#eTitle', 'never saved');
+const escClosed = wEsc.waitForEvent('close'); await wEsc.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))).catch(() => {}); await escClosed; await page.waitForTimeout(200);
+ok(wEsc.isClosed() && (await page.locator('tbody tr:has-text("never saved")').count()) === 0, 'Escape closes the editor window without saving');
+const wX = await addFolderWin(); await closeWin(wX, '#edX');
+ok(wX.isClosed(), 'the X button closes the editor window');
+const wMod = await addEntryWin();
+ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('editor.html')).isModal())), 'the editor is modal over the main window');
+await cancelWin(wMod);
+ok(await page.evaluate(() => !document.getElementById('entryForm') && !document.getElementById('entryDlg') && !document.getElementById('folderForm')), 'the main window has no entry or folder form any more');
 await page.click('#btnSave'); await page.waitForTimeout(300);
 const wasMax = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized());
 await page.click('#wMax'); await page.waitForTimeout(500);
