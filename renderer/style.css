@@ -24,6 +24,7 @@ input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
 .muted { color: var(--muted); } .error { color: var(--danger); min-height: 1.4em; margin: 6px 0 0; }
 .row { display: flex; gap: 8px; align-items: center; } .row > input { flex: 1; } .between { justify-content: space-between; } .center { justify-content: center; }
 .grow { flex: 1; } .bar { padding: 8px 10px; }
+.kic { display: inline-block; flex: none; width: 1.25em; height: 1.25em; vertical-align: -0.25em; background: url(icons.png) no-repeat; background-size: 1000% 1400%; }
 .ico { width: 1.25em; height: 1.25em; vertical-align: -0.25em; object-fit: contain; border-radius: 3px; }
 
 /* title bar: the window is frameless, so this row is the drag handle and holds the window buttons */
@@ -36,6 +37,8 @@ input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
 .menuwrap { position: relative; }
 .popmenu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 30; }
 .popmenu button { display: block; width: 100%; text-align: left; background: transparent; }
+.popmenu button:hover:not(:disabled), .popmenu button:focus-visible { background: var(--hover); }
+.popmenu button:disabled { opacity: .45; cursor: default; }
 
 #lock { display: grid; place-items: center; }
 .card { width: min(420px, 92vw); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 24px; display: grid; gap: 12px; }
@@ -108,7 +111,7 @@ progress { width: 100%; height: 6px; accent-color: var(--accent); }
 
 /* Logos: the PNGs are alpha shapes, painted with the theme's --logo colour through a CSS mask. */
 .logomark, .logoword { display: inline-block; background-color: var(--logo); mask-repeat: no-repeat; mask-position: center; mask-size: contain; -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; -webkit-mask-size: contain; }
-.logomark { aspect-ratio: 567 / 501; mask-image: url(logo-mark.png); -webkit-mask-image: url(logo-mark.png); }
+.logomark { aspect-ratio: 640 / 557; mask-image: url(logo-mark.png); -webkit-mask-image: url(logo-mark.png); }
 .logoword { aspect-ratio: 1096 / 348; mask-image: url(logo-text.png); -webkit-mask-image: url(logo-text.png); }
 
 /* Settings > Theme picker */
@@ -153,3 +156,16 @@ body.editor { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; heigh
 #edFoot { padding: 8px 16px 14px; border-top: 1px solid var(--line); display: grid; gap: 4px; }
 #edFoot .error { margin: 0; min-height: 1.2em; }
 .edbar { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* right-click menu on an entry, with sub menus (Open with, Move to) */
+#ctxMenu { position: fixed; min-width: 200px; z-index: 40; }
+.subwrap { position: relative; }
+.popmenu .arrow { float: right; opacity: .7; margin-left: 14px; }
+.popmenu.sub { left: 100%; top: -5px; min-width: 190px; max-height: 60vh; overflow: auto; }
+.popmenu.sub.flip { left: auto; right: 100%; } .popmenu.sub.up { top: auto; bottom: -5px; }
+.popmenu .kic { margin-right: 4px; }
+/* generator window: the dialog is the page */
+body.genwin { grid-template-rows: auto minmax(0, 1fr); }
+body.genwin dialog { position: static; display: block; width: auto; max-height: none; margin: 0; border: 0; border-radius: 0; background: transparent; padding: 16px; overflow: auto; }
+body.genwin dialog h2 { display: none; }
+body.editor #toast { bottom: 84px; }

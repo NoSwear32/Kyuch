@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds every logo/icon file from brand/source/kyuch-logo.webp (orange key + "kyuch" wordmark with a transparent background).
+"""Builds every logo/icon file. The key (mark) comes from brand/source/kyuch-key.png; the "kyuch" wordmark from brand/source/kyuch-logo.webp.
 Needs Pillow (python3-pil). Run: python3 brand/make-brand.py
 
 Outputs
@@ -44,8 +44,15 @@ def part(x0, x1):
 def coloured(a, rgb=ORANGE):
     out = Image.new('RGBA', a.size, rgb + (0,)); out.putalpha(a); return out
 
-mark_a, text_a = part(0, split), part(split, w)
-full_a = part(0, w)
+text_a = part(split, w)
+# The mark is the newer "K key" artwork (transparent PNG); trim the haze, tighten the box, and shrink it: it is shown at <= 100 px.
+k = Image.open(ROOT / 'brand' / 'source' / 'kyuch-key.png').convert('RGBA').getchannel('A').point(lambda a: 0 if a < 24 else min(255, round(a * 255 / 250)))
+box = k.getbbox(); k = k.crop((box[0] - PAD, box[1] - PAD, box[2] + PAD, box[3] + PAD))
+mark_a = k.resize((640, round(640 * k.height / k.width)), Image.LANCZOS)
+# Full lockup: key, then the wordmark at half the key's height, centred vertically.
+tw = text_a.resize((round(text_a.width * (mark_a.height * 0.5) / text_a.height), round(mark_a.height * 0.5)), Image.LANCZOS)
+full_a = Image.new('L', (mark_a.width + 60 + tw.width, mark_a.height), 0)
+full_a.paste(mark_a, (0, 0)); full_a.paste(tw, (mark_a.width + 60, (mark_a.height - tw.height) // 2))
 (ROOT / 'renderer').mkdir(exist_ok=True); (ROOT / 'brand' / 'png').mkdir(exist_ok=True, parents=True)
 coloured(mark_a).save(ROOT / 'renderer' / 'logo-mark.png', optimize=True)
 coloured(text_a).save(ROOT / 'renderer' / 'logo-text.png', optimize=True)

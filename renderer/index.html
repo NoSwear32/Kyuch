@@ -36,8 +36,6 @@
     <button id="btnSave" class="needs-db" title="Save (Ctrl+S)">Save</button>
     <button id="btnLock" class="needs-db" title="Lock (Ctrl+L)">Lock</button>
     <button id="btnGen" class="needs-db" title="Password generator">Generator</button>
-    <button id="btnSettings" title="Settings">Settings</button>
-    <button id="btnAbout" title="About Kyuch">About</button>
   </div>
   <input id="search" class="needs-db" type="search" placeholder="Search (Ctrl+F)" hidden>
   <div id="winctl">
@@ -73,33 +71,6 @@
   <footer id="status"></footer>
 </div>
 
-<dialog id="settingsDlg">
-  <form method="dialog" id="settingsForm">
-    <h2>Settings</h2>
-    <div class="muted" id="dbInfo" hidden></div>
-    <label>Auto-lock after idle minutes (0 = never) <input id="aLock" type="number" min="0"></label>
-    <label>Alt+Tab delay (milliseconds to wait before auto-type presses Alt+Tab) <input id="aDelay" type="number" min="0" max="10000" step="50"></label>
-    <label class="check"><input type="checkbox" id="aAutoUpd"> Check for updates once a day when Kyuch starts</label>
-    <label class="check"><input type="checkbox" id="aTray"> Minimize to the system tray when the window is closed (otherwise Kyuch quits)</label>
-    <label class="check"><input type="checkbox" id="aTrayLock"> Lock the database when it goes to the tray</label>
-    <label>Open links from entries in <select id="aBrowser"></select></label>
-    <div class="muted">Theme</div>
-    <div id="aThemes" class="themes" role="radiogroup" aria-label="Theme"></div>
-    <fieldset id="aAccessBox" hidden>
-      <legend>Auto-type permission (Linux)</legend>
-      <small class="muted" id="aAccessText"></small>
-      <div class="row"><button type="button" id="aAccessBtn"></button></div>
-    </fieldset>
-    <label id="aLayoutWrap">Keyboard layout for auto-type <select id="aLayout"><option value="auto">Detect automatically (GNOME)</option><option value="us">US</option><option value="gb">UK (GB)</option></select></label>
-    <div id="aPwBox" class="stack">
-    <label>Change master password <input id="aNewPw" type="password" autocomplete="off" placeholder="New master password (leave empty to keep)"></label>
-    <label>Repeat the new master password <input id="aNewPw2" type="password" autocomplete="off"></label>
-    <p class="error" id="aErr"></p>
-    </div>
-    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Apply</button></menu>
-  </form>
-</dialog>
-
 <dialog id="aboutDlg">
   <form method="dialog" id="aboutForm">
     <div class="about">
@@ -121,6 +92,15 @@
   </form>
 </dialog>
 
+<dialog id="rmDlg">
+  <form method="dialog" id="rmForm">
+    <h2>Remove from the list?</h2>
+    <p>“<span id="rmName"></span>” will be removed from this list. The database file itself is not deleted; you can add it again with Open file.</p>
+    <label class="check"><input type="checkbox" id="rmAsk"> Don't show this again (you can turn it back on in Settings)</label>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Remove</button></menu>
+  </form>
+</dialog>
+
 <dialog id="newDbDlg">
   <form method="dialog" id="newDbForm">
     <h2>New database</h2>
@@ -133,12 +113,11 @@
 </dialog>
 
 <button id="themeBtn" title="Toggle dark / light mode"></button>
+<div id="ctxMenu" class="popmenu" role="menu" hidden></div>
 <div id="toast" hidden></div>
 <script src="themes.js"></script>
 <script src="icons.js"></script>
-<script src="gen.js"></script>
 <script src="common.js"></script>
-<script src="generator.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

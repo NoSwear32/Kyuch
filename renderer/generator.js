@@ -1,5 +1,5 @@
-// The password generator dialog. Used by the main window (toolbar) and by the entry editor window ("Generate").
-// Its markup is injected here so both pages share one definition.
+// The password generator. Used by the generator window (genwin.html: the dialog is shown as the page) and by the entry editor window
+// ("Generate" opens it as a dialog and takes the password). Its markup is injected here so both pages share one definition.
 document.body.insertAdjacentHTML('beforeend', `<dialog id="genDlg">
   <form method="dialog" id="genForm">
     <h2>Password generator</h2>
@@ -91,5 +91,15 @@ async function openGenerator(useButton) {
   genCtl.wipe();
   return pw;
 }
-if ($('btnGen')) $('btnGen').onclick = () => openGenerator(false); // the main window's toolbar button
 
+// The generator window: the dialog fills the page, and closing it closes the window.
+if (document.body.classList.contains('genwin')) (async () => {
+  try { applyTheme((await call('cfg:get')).theme); } catch { /* keep the default theme */ }
+  genCtl = wireGenerator(); genCtl.open(false);
+  const dlg = $('genDlg'), closeMe = () => dlg.close();
+  dlg.addEventListener('close', () => { genCtl.wipe(); call('popup:close').catch(() => {}); });
+  $('edX').onclick = closeMe;
+  document.addEventListener('keydown', (e) => e.key === 'Escape' && closeMe());
+  watchActivity();
+  dlg.show();
+})();

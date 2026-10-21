@@ -1,7 +1,7 @@
 // Editor popup window: one entry or one folder. The main process hands over the data (editor:init); Save sends the result back
 // (editor:save), which updates the database and closes this window. Cancel / the X / Esc just close it.
 let ctx = null;                                   // what editor:init returned
-const closeMe = () => call('editor:close').catch(() => {});
+const closeMe = () => call('popup:close').catch(() => {});
 
 // ---------- icon picker ----------
 // Resolves with {icon, customIcon}. Cancel, Esc and clicking outside all resolve with the unchanged value.
@@ -10,7 +10,7 @@ function pickIcon(cur) {
     const dlg = $('iconDlg');
     let done = false;
     const finish = (v) => { if (!done) { done = true; res(v); } dlg.close(); };
-    $('iconGrid').replaceChildren(...ICONS.map((ic, i) => h('button', { type: 'button', class: !cur.customIcon && cur.icon === i ? 'on' : '', title: `#${i}`, onclick: () => finish({ icon: i, customIcon: null }) }, ic)));
+    $('iconGrid').replaceChildren(...Array.from({ length: ICON_COUNT }, (_, i) => h('button', { type: 'button', class: !cur.customIcon && cur.icon === i ? 'on' : '', title: `#${i}`, onclick: () => finish({ icon: i, customIcon: null }) }, kicon(i))));
     $('customGrid').replaceChildren(...Object.entries(ICON_MAP).map(([id, src]) =>
       h('button', { type: 'button', class: cur.customIcon === id ? 'on' : '', onclick: () => finish({ icon: cur.icon, customIcon: id }) }, h('img', { class: 'ico', src, alt: '' }))));
     $('iconAdd').onclick = () => act(async () => {
@@ -22,7 +22,7 @@ function pickIcon(cur) {
   });
 }
 const iconButton = (btn, get, set) => {
-  const paint = () => btn.replaceChildren(iconNode(get(), '🔑'));
+  const paint = () => btn.replaceChildren(iconNode(get(), 0));
   paint();
   btn.onclick = async () => { set(await pickIcon(get())); paint(); };
 };
@@ -144,8 +144,6 @@ async function save(props) {
   ICON_MAP = ctx.icons || {};
   $('edX').onclick = $('edCancel').onclick = closeMe;
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) closeMe(); });
-  // typing here counts as activity, so the idle auto-lock does not fire in the middle of an edit (throttled)
-  let last = 0;
-  for (const ev of ['keydown', 'mousedown']) document.addEventListener(ev, () => { if (Date.now() - last > 10_000) { last = Date.now(); call('app:activity').catch(() => {}); } }, { passive: true });
+  watchActivity();
   ctx.kind === 'entry' ? startEntry() : startFolder();
 })();

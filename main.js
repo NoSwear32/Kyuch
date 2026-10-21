@@ -27,7 +27,7 @@ let win, vault = null, clipTimer = null, clipText = null;
 
 // ---- app-level config (not in the database) ----
 const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
-let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: true, lastUpdateCheck: 0, keyboardLayout: 'auto', closeToTray: true, lockOnTray: true, browser: 'system' };
+let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: true, lastUpdateCheck: 0, keyboardLayout: 'auto', closeToTray: true, lockOnTray: true, browser: 'system', confirmRemoveDb: true };
 try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; } catch { /* first run */ }
 delete cfg.typeStartDelay; // pre-0.3.2 setting, was in seconds
 // Native widgets (file dialogs, message boxes) follow the dark/light kind of the chosen theme.
@@ -36,6 +36,7 @@ const applyTheme = () => {
   nativeTheme.themeSource = t ? (t.dark ? 'dark' : 'light') : 'system';
 };
 const saveCfg = () => fs.writeFileSync(cfgFile(), JSON.stringify(cfg), { mode: 0o600 }); // lists the user's recent database files: keep it private
+const forget = (p) => { cfg.recent = cfg.recent.filter((r) => r !== p); approved.delete(p); saveCfg(); }; // drop a database from the list; the file is never touched
 const remember = (p) => { cfg.recent = [p, ...cfg.recent.filter((r) => r !== p)].slice(0, 8); saveCfg(); approved.add(p); };
 
 // ---- clipboard with auto-clear ----
@@ -77,7 +78,7 @@ const state = () => vault && {
 async function lockVault(auto) {
   if (auto && vault?.dirty) { try { await vault.save(); } catch { /* fall back to the prompt below */ } }
   if (!(await canLeave())) return false;
-  clearClipboard(); closeEditors(); // an open editor holds plaintext passwords
+  clearClipboard(); closePopups(); // an open editor holds plaintext passwords
   vault = null;
   return true;
 }
@@ -102,7 +103,7 @@ function ensureTray() {
 }
 function dropTray() { if (tray && !tray.isDestroyed()) tray.destroy(); tray = null; }
 async function hideToTray() {
-  closeEditors();
+  closePopups();
   if (cfg.lockOnTray && vault) { if (!(await lockVault(false))) return; win.webContents.send('app:locked'); } // a hidden window must not hold an open vault
   win.hide();
 }
@@ -141,19 +142,29 @@ async function adopt(v) {
 // Every handler returns {ok,data} / {ok:false,error} so the renderer can show messages.
 const handlers = {
   'cfg:get': () => cfg,
-  'cfg:set': (c) => {
-    cfg = { ...cfg, autoLockMin: Math.min(1440, Math.max(0, +c.autoLockMin || 0)), // 0 = never; a huge value would overflow the timer and fire at once
-      keyboardLayout: ['auto', 'us', 'gb'].includes(c.keyboardLayout) ? c.keyboardLayout : cfg.keyboardLayout, altTabDelayMs: Math.min(10000, Math.max(0, Math.round(+c.altTabDelayMs) || 0)), theme: THEMES.some((t) => t.id === c.theme) ? c.theme : cfg.theme, autoUpdateCheck: c.autoUpdateCheck === undefined ? cfg.autoUpdateCheck : !!c.autoUpdateCheck };
-    for (const k of ['closeToTray', 'lockOnTray']) if (typeof c[k] === 'boolean') cfg[k] = c[k];
-    if (browsers.IDS.has(c.browser)) cfg.browser = c.browser;       // only ids from the fixed browser table, never a command
+  'cfg:set': (c) => { // partial updates are fine: only the keys that are present (and valid) change
+    const num = (v, hi) => Math.min(hi, Math.max(0, Math.round(+v) || 0)), next = { ...cfg };
+    if (c.autoLockMin !== undefined) next.autoLockMin = num(c.autoLockMin, 1440); // 0 = never; a huge value would overflow the timer and fire at once
+    if (c.altTabDelayMs !== undefined) next.altTabDelayMs = num(c.altTabDelayMs, 10000);
+    if (['auto', 'us', 'gb'].includes(c.keyboardLayout)) next.keyboardLayout = c.keyboardLayout;
+    if (THEMES.some((t) => t.id === c.theme)) next.theme = c.theme;
+    for (const k of ['autoUpdateCheck', 'closeToTray', 'lockOnTray', 'confirmRemoveDb']) if (typeof c[k] === 'boolean') next[k] = c[k];
+    if (browsers.IDS.has(c.browser)) next.browser = c.browser;       // only ids from the fixed browser table, never a command
+    cfg = next;
     applyTheme(); saveCfg();
     if (cfg.closeToTray) ensureTray(); else dropTray();
+    win?.webContents.send('cfg:changed', cfg);                        // the main window follows changes made in the Settings window
     return cfg;
   },
   'browsers:list': () => [{ id: 'system', label: 'System default' }, ...browsers.detect().map(({ id, label }) => ({ id, label }))],
-  'recent:remove': ({ path: p }) => { // forget a database in the list; the file itself is never touched
-    cfg.recent = cfg.recent.filter((r) => r !== p); approved.delete(p); saveCfg();
-    return cfg;
+  'recent:remove': ({ path: p }) => { forget(p); return cfg; },
+  // "Close database": lock it (asking about unsaved changes first) and take it off the list of databases
+  'db:close': async () => {
+    if (!vault) return true;
+    const p = vault.path;
+    if (!(await lockVault(false))) return false;
+    forget(p);
+    return true;
   },
   'app:quit': () => quitApp(),
   'clip:copy': ({ text }) => copy(String(text), DEFAULTS.clipboardClear), // generator output; auto-clears like entry passwords
@@ -216,11 +227,9 @@ const handlers = {
     return { ...s, newIcon: id };
   },
 
-  // ---- editor popup windows ----
-  'editor:open': ({ kind, id, groupId, parentId }) => {
-    if (kind !== 'entry' && kind !== 'folder') throw new Error('Unknown editor');
-    openEditor({ kind, id: id || null, groupId: groupId || null, parentId: parentId || null });
-  },
+  // ---- popup windows (entry/folder editor, Settings, password generator) ----
+  'popup:open': ({ kind, id, groupId, parentId }) => { openPopup({ kind, id: id || null, groupId: groupId || null, parentId: parentId || null }); },
+  'popup:close': (_a, e) => { const w = BrowserWindow.fromWebContents(e.sender); if (w && popupCtx.has(e.sender.id)) w.close(); },
   'editor:init': (_a, e) => {
     const c = ctxOf(e);
     const base = { kind: c.kind, id: c.id, cfg, icons: vault.icons(), legacy: vault.legacy, defaults: DEFAULTS };
@@ -239,8 +248,7 @@ const handlers = {
     setImmediate(() => w && !w.isDestroyed() && w.close());       // after this reply has been delivered
     return true;
   },
-  'editor:close': (_a, e) => { const w = BrowserWindow.fromWebContents(e.sender); if (w && editorCtx.has(e.sender.id)) w.close(); },
-  'app:activity': (_a, e) => { if (editorCtx.has(e.sender.id)) win?.webContents.send('app:activity'); },
+  'app:activity': (_a, e) => { if (popupCtx.has(e.sender.id)) win?.webContents.send('app:activity'); },
 
   'pick:new': async () => {
     const r = await dialog.showSaveDialog(win, { title: 'New database', defaultPath: 'passwords.kdbx', filters });
@@ -290,7 +298,9 @@ const handlers = {
     if (!password) throw new Error('Master password cannot be empty');
     await vault.changePassword(password);
     await vault.save();
-    return state();
+    const s = state();
+    win?.webContents.send('state:changed', s);                        // asked from the Settings window: tell the main window
+    return s;
   },
 
   'group:add': ({ parentId, ...p }) => (vault.addGroup(parentId, p), state()),
@@ -318,10 +328,11 @@ const handlers = {
     if (!f) throw new Error('Unknown field');
     copy(vault.secret(id, f), vault.clipboardClear(id));
   },
-  'entry:open': ({ id }) => {
+  'entry:open': ({ id, browser }) => { // `browser`: one-off choice from the "Open with" menu; otherwise the one chosen in Settings
     let u = vault.secret(id, 'URL').trim();
     if (!/^[a-z][a-z0-9+.-]*:/i.test(u)) u = 'https://' + u;
-    return browsers.openUrl(u, cfg.browser, shell);
+    if (browser !== undefined && !browsers.IDS.has(browser)) throw new Error('Unknown browser');
+    return browsers.openUrl(u, browser ?? cfg.browser, shell);
   },
   'entry:autotype': async ({ id }) => {
     if (typing) throw new Error('Auto-type is already running');
@@ -376,30 +387,37 @@ function hardenWindow(w) {
   w.webContents.on('will-attach-webview', (e) => e.preventDefault());
 }
 
-// ---- editor popup windows: New/Edit entry and folder each open in a window of their own ----
-let editor = null;                 // the one open editor window (modal over the main window)
-const editorCtx = new Map();       // webContents id -> what that window edits; only these windows may call editor:init / editor:save
-function openEditor(ctx) {
-  if (!vault) throw new Error('The database is locked');
+// ---- popup windows: the entry/folder editor, Settings and the password generator each open in a window of their own ----
+const POPUPS = {
+  entry: { page: 'editor.html', width: 640, height: 800, needsVault: true },
+  folder: { page: 'editor.html', width: 600, height: 720, needsVault: true },
+  settings: { page: 'settings.html', width: 640, height: 800 },
+  generator: { page: 'genwin.html', width: 520, height: 640 },
+};
+let popup = null;                  // the one open popup window (modal over the main window)
+const popupCtx = new Map();        // webContents id -> what that window is for; only these windows may call popup:close, editor:init, ...
+function openPopup(ctx) {
+  const spec = POPUPS[ctx.kind];
+  if (!spec) throw new Error('Unknown window');
+  if (spec.needsVault && !vault) throw new Error('The database is locked');
   if (ctx.kind === 'entry' && ctx.id) vault.entry(ctx.id);       // throws if it does not exist
   if (ctx.kind === 'folder' && ctx.id) vault.group(ctx.id);
-  if (editor && !editor.isDestroyed()) { editor.focus(); return; }
-  const size = ctx.kind === 'entry' ? { width: 640, height: 800 } : { width: 600, height: 720 };
+  if (popup && !popup.isDestroyed()) { popup.focus(); return; }
   const pb = win.getBounds();
   const w = new BrowserWindow({
-    ...size, minWidth: 520, minHeight: 520, x: Math.max(0, Math.round(pb.x + (pb.width - size.width) / 2)), y: Math.max(0, Math.round(pb.y + (pb.height - size.height) / 2)),
+    width: spec.width, height: spec.height, minWidth: 480, minHeight: 480, x: Math.max(0, Math.round(pb.x + (pb.width - spec.width) / 2)), y: Math.max(0, Math.round(pb.y + (pb.height - spec.height) / 2)),
     parent: win, modal: true, frame: false, show: false, skipTaskbar: true, minimizable: false, maximizable: false,
     title: 'Kyuch', icon: path.join(__dirname, 'icon.png'), backgroundColor: '#1b1d22', webPreferences: webPrefs(),
   });
   hardenWindow(w);
   const id = w.webContents.id;
-  editorCtx.set(id, ctx); editor = w;
+  popupCtx.set(id, ctx); popup = w;
   w.once('ready-to-show', () => w.show());
-  w.on('closed', () => { editorCtx.delete(id); if (editor === w) editor = null; });
-  w.loadFile('renderer/editor.html');
+  w.on('closed', () => { popupCtx.delete(id); if (popup === w) popup = null; });
+  w.loadFile('renderer/' + spec.page);
 }
-const closeEditors = () => { if (editor && !editor.isDestroyed()) editor.close(); };
-const ctxOf = (e) => { const c = editorCtx.get(e.sender.id); if (!c || !vault) throw new Error('This window is no longer needed'); return c; };
+const closePopups = () => { if (popup && !popup.isDestroyed()) popup.close(); };
+const ctxOf = (e) => { const c = popupCtx.get(e.sender.id); if (!c || !vault) throw new Error('This window is no longer needed'); return c; };
 const findNode = (n, id) => (n.id === id ? n : n.groups.reduce((f, c) => f || findNode(c, id), null));
 
 if (gotLock) app.whenReady().then(() => {

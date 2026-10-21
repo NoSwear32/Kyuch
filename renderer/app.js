@@ -10,12 +10,12 @@ function setState(s) {
   S = s;
   if (s) { applyTheme(s.cfg.theme); ICON_MAP = s.icons || {}; }
   $('lock').hidden = !!s; $('app').hidden = !s;
-  document.body.toggleAttribute('data-locked', !s); $('search').hidden = !s; // while locked the bar keeps the logo menu, Settings, About and the window buttons
+  document.body.toggleAttribute('data-locked', !s); $('search').hidden = !s; // while locked the bar keeps only the logo menu and the window buttons
   if (!s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
-    for (const id of ['aNewPw', 'aNewPw2', 'nPw', 'nPw2', 'gOut']) $(id).value = '';
-    genCtl?.wipe(); clearInterval(detailTimer);
+    for (const id of ['nPw', 'nPw2']) $(id).value = '';
+    clearInterval(detailTimer); closeMenus();
     query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return;
   }
   groups = new Map(); entries = new Map();
@@ -63,7 +63,7 @@ function renderTree() {
       ondrop: (e) => { e.preventDefault(); row.classList.remove('drop'); move(e.dataTransfer.getData('text/plain'), g.id); },
     },
     h('span', { class: 'tw', onclick: (e) => { e.stopPropagation(); open ? expanded.delete(g.id) : expanded.add(g.id); renderTree(); } }, kids ? (open ? '▾' : '▸') : ''),
-    h('span', {}, iconNode(g, '📁')), h('span', {}, g.name));
+    h('span', {}, iconNode(g, 48)), h('span', {}, g.name));
     return h('div', {}, row, kids && open ? h('div', { class: 'kids' }, g.groups.map((c) => node(c))) : null);
   };
   keepFocus($('tree'), '.node.sel', () => $('tree').replaceChildren(node(S.root, true)));
@@ -82,7 +82,7 @@ function visibleEntries() {
 function renderList() {
   const cur = groups.get(selGroup).g, rows = visibleEntries();
   const bar = query ? h('div', { class: 'muted bar' }, `Search results: ${rows.length}`) : h('div', { class: 'row bar' },
-    h('strong', {}, iconNode(cur, '📁'), ' ' + cur.name),
+    h('strong', {}, iconNode(cur, 48), ' ' + cur.name),
     h('span', { class: 'muted grow' }, cur.notes),
     h('button', { onclick: () => editFolder(cur.id) }, 'Folder settings'),
     cur.id === S.root.id || cur.isBin ? null : h('button', { class: 'danger', onclick: () => delFolder(cur) }, 'Delete'));
@@ -96,8 +96,9 @@ function renderList() {
       },
       onclick: () => selectEntry(e.id),
       ondblclick: () => editEntry(e.id),
+      oncontextmenu: (ev) => entryMenu(ev, e, g),
       ondragstart: (ev) => ev.dataTransfer.setData('text/plain', e.id),
-    }, h('td', {}, iconNode(e, '🔑'), ' ' + e.title), h('td', {}, e.username), h('td', {}, query ? pathOf(g.id) || g.name : e.url)))))
+    }, h('td', {}, iconNode(e, 0), ' ' + e.title), h('td', {}, e.username), h('td', {}, query ? pathOf(g.id) || g.name : e.url)))))
     : h('div', { class: 'empty' }, query ? 'No matches' : 'No entries here. Use Add, then Entry.');
   keepFocus($('list'), 'tr.sel', () => $('list').replaceChildren(bar, table));
 }
@@ -127,7 +128,7 @@ function renderDetail() {
   const field = (label, text, ...btns) => h('div', { class: 'field' }, h('label', {}, label), h('div', { class: 'v' }, h('span', {}, text), btns));
   const pw = reveal?.id === e.id ? reveal.text : '••••••••';
   $('detail').replaceChildren(...[
-    h('h2', {}, iconNode(e, '🔑'), e.title),
+    h('h2', {}, iconNode(e, 0), e.title),
     h('div', { class: 'muted' }, pathOf(g.id) || g.name),
     field('Username', e.username, h('button', { onclick: () => copy(e.id, 'username') }, 'Copy')),
     field('Password', pw,
@@ -166,59 +167,11 @@ function delFolder(g) {
 }
 
 // New/edit entry and folder open in their own popup window (see editor.js); the result comes back as a state:changed event.
-const editEntry = (id) => act(() => call('editor:open', { kind: 'entry', id: id || undefined, groupId: id ? undefined : selGroup }));
-const editFolder = (id, parentId) => act(() => call('editor:open', { kind: 'folder', id: id || undefined, parentId: id ? undefined : parentId }));
+const editEntry = (id) => act(() => call('popup:open', { kind: 'entry', id: id || undefined, groupId: id ? undefined : selGroup }));
+const editFolder = (id, parentId) => act(() => call('popup:open', { kind: 'folder', id: id || undefined, parentId: id ? undefined : parentId }));
 kyuch.onStateChanged((s) => { if (selGroup) expanded.add(selGroup); applyState(s); }); // a new folder is created inside the selected one: show it
+kyuch.onCfgChanged((c) => { applyTheme(c.theme); if (S) { S.cfg = c; armIdle(); } }); // Settings were applied in their own window
 kyuch.onActivity(() => { if (S) armIdle(); }); // typing in an editor window counts as activity for the idle auto-lock
-
-// ---------- settings dialog ----------
-async function appSettings() {
-  const hadVault = !!S, cfg = S ? S.cfg : await call('cfg:get');
-  $('aLock').value = cfg.autoLockMin; $('aDelay').value = cfg.altTabDelayMs; $('aAutoUpd').checked = cfg.autoUpdateCheck !== false;
-  $('aTray').checked = cfg.closeToTray !== false; $('aTrayLock').checked = cfg.lockOnTray !== false;
-  $('aNewPw').value = ''; $('aNewPw2').value = ''; $('aErr').textContent = '';
-  $('aPwBox').hidden = $('dbInfo').hidden = !hadVault; // database-specific parts only make sense with one open
-  const info = await call('app:info'); $('aLayoutWrap').hidden = info.platform === 'win32'; $('aLayout').value = cfg.keyboardLayout || 'auto';
-  const list = await call('browsers:list');
-  $('aBrowser').replaceChildren(...list.map((b) => h('option', { value: b.id }, b.label)));
-  $('aBrowser').value = list.some((b) => b.id === cfg.browser) ? cfg.browser : 'system';
-  const paintAccess = (st) => {
-    $('aAccessBox').hidden = !st.supported;
-    if (!st.supported) return;
-    $('aAccessText').textContent = st.writable
-      ? (st.ours ? 'Enabled. Auto-type may emulate a keyboard.' : 'Enabled by a rule outside Kyuch (nothing to change here).')
-      : 'Off. Auto-type needs permission to emulate a keyboard (/dev/uinput). While this is on, every program you run can type into any window, so it is off until you allow it.';
-    $('aAccessBtn').hidden = !st.canChange || (st.writable && !st.ours);
-    $('aAccessBtn').textContent = st.writable ? 'Withdraw permission…' : 'Allow auto-type…';
-    $('aAccessBtn').onclick = () => act(async () => { paintAccess(await call('autotype:setAccess', { enable: !st.writable })); });
-  };
-  paintAccess(await call('autotype:status'));
-  if (hadVault) $('dbInfo').textContent = `${S.name} — ${S.path} — KDBX${S.legacy ? 3 : 4}`;
-  let chosen = cfg.theme || 'system';
-  const cards = THEMES.map((t) => h('button', { type: 'button', class: 'theme-card', 'data-theme': t.id, role: 'radio', onclick: () => { chosen = t.id; applyTheme(chosen); mark(); } },
-    h('span', {}, t.label), t.id === 'system' ? null : h('span', { class: 'chips' }, h('i'), h('i'), h('i'))));
-  const mark = () => cards.forEach((c) => c.setAttribute('aria-checked', String(c.dataset.theme === chosen)));
-  $('aThemes').replaceChildren(...cards); mark(); // clicking a card previews it live
-  const ok = await show($('settingsDlg'));
-  if (hadVault && !S) return;                      // the vault locked while Settings was open: the lock already closed everything
-  if (!ok) { applyTheme(cfg.theme); return; }     // Cancel / Esc: back to the saved theme
-  await act(async () => {
-    const next = await call('cfg:set', {
-      autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: chosen, autoUpdateCheck: $('aAutoUpd').checked, keyboardLayout: $('aLayout').value,
-      closeToTray: $('aTray').checked, lockOnTray: $('aTrayLock').checked, browser: $('aBrowser').value,
-    });
-    if (S) S.cfg = next;
-    applyTheme(next.theme);
-    if (S) armIdle();
-    if (S && $('aNewPw').value) { setState(await call('db:changePassword', { password: $('aNewPw').value })); toast('Master password changed'); }
-    $('aNewPw').value = $('aNewPw2').value = '';
-  });
-}
-
-// A typo in a new master password would lock the user out of their own database: make them type it twice, like when creating one.
-$('settingsForm').addEventListener('submit', (e) => {
-  if (e.submitter?.value === 'ok' && $('aNewPw').value !== $('aNewPw2').value) { e.preventDefault(); $('aErr').textContent = 'The two master passwords do not match.'; }
-});
 
 // ---------- lock screen ----------
 const nameOf = (p) => p.split(/[\\/]/).pop().replace(/\.kdbx$/i, '');
@@ -242,9 +195,13 @@ const trashIcon = () => { // inline SVG (no innerHTML): a trash can
   const p = document.createElementNS(ns, 'path'); p.setAttribute('d', 'M2.5 4h11M6.2 4V2.6h3.6V4M4 4l.7 9.2c0 .5.4.8.9.8h4.8c.5 0 .9-.3.9-.8L12 4M6.6 6.8v4.4M9.4 6.8v4.4');
   s.append(p); return s;
 };
-// Forgets a database in the list only. The file on disk is never touched.
+// Forgets a database in the list only. The file on disk is never touched. "Don't show this again" turns the question off (Settings turns it back on).
 const removeRecent = (p, label) => act(async () => {
-  if (!confirm(`Remove “${label}” from this list?\n\nThe database file itself is not deleted; you can add it again with Open file.`)) return;
+  if ((await call('cfg:get')).confirmRemoveDb !== false) {
+    $('rmName').textContent = label; $('rmAsk').checked = false;
+    if (!(await show($('rmDlg')))) return;
+    if ($('rmAsk').checked) await call('cfg:set', { confirmRemoveDb: false });
+  }
   if (unlockPath === p) { unlockPath = null; $('unlockForm').hidden = true; }
   await call('recent:remove', { path: p });
   showRecent();
@@ -289,11 +246,63 @@ $('themeBtn').onclick = () => act(async () => {
   if (S) S.cfg = next;
 });
 $('btnSave').onclick = () => update('db:save');
-$('btnSettings').onclick = appSettings;
+$('btnGen').onclick = () => act(() => call('popup:open', { kind: 'generator' }));
+
+// ---------- right-click menu on an entry ----------
+let browserList = null;
+// Sub menu: opens on hover or click (Right arrow from the keyboard), flips to the left / upwards when it would leave the window.
+function subMenu(label, items) {
+  const box = h('div', { class: 'popmenu sub', role: 'menu', hidden: true }, items);
+  const open = (focus) => {
+    for (const o of ctxMenu.querySelectorAll('.sub')) if (o !== box) o.hidden = true;
+    box.hidden = false; box.classList.remove('flip', 'up');
+    const r = box.getBoundingClientRect();
+    box.classList.toggle('flip', r.right > innerWidth); box.classList.toggle('up', r.bottom > innerHeight);
+    if (focus) box.querySelector('button')?.focus();
+  };
+  const btn = h('button', { role: 'menuitem', 'aria-haspopup': 'menu', onclick: (ev) => { ev.stopPropagation(); open(false); }, onkeydown: (ev) => { if (ev.key === 'ArrowRight') { ev.preventDefault(); open(true); } } }, label, h('span', { class: 'arrow' }, '▸'));
+  return h('div', { class: 'subwrap', onmouseenter: () => open(false), onmouseleave: () => { box.hidden = true; } }, btn, box);
+}
+const ctxMenu = $('ctxMenu');
+async function entryMenu(ev, e, g) {
+  ev.preventDefault();
+  const fromKeyboard = ev.clientX === 0 && ev.clientY === 0, row = ev.currentTarget.getBoundingClientRect();
+  const x = fromKeyboard ? row.left + 24 : ev.clientX, y = fromKeyboard ? row.bottom : ev.clientY;
+  closeMenus(); selectEntry(e.id);
+  browserList ??= await call('browsers:list');
+  const item = (label, fn, disabled) => h('button', { role: 'menuitem', disabled: disabled || null, onclick: () => { closeMenus(); fn(); } }, label);
+  const open = (browser) => () => act(() => call('entry:open', { id: e.id, browser }));
+  const folders = [], walk = (n, depth) => { if (n.isBin) return; if (n.id !== g.id) folders.push([n, depth]); n.groups.forEach((c) => walk(c, depth + 1)); }; walk(S.root, 0);
+  const dest = folders.map(([n, depth]) => { const b = item('', () => move(e.id, n.id)); b.append(iconNode(n, 48), ' ' + n.name); b.style.paddingLeft = 10 + depth * 14 + 'px'; return b; });
+  ctxMenu.replaceChildren(
+    item('Edit entry', () => editEntry(e.id)),
+    h('hr', { class: 'sep' }),
+    item('Copy username', () => copy(e.id, 'username')),
+    item('Copy password', () => copy(e.id, 'password')),
+    item('Auto-type', () => autoType(e.id)),
+    h('hr', { class: 'sep' }),
+    item('Open URL', open(undefined), !e.url),
+    e.url ? subMenu('Open with', browserList.map((b) => item(b.label, open(b.id)))) : item('Open with', () => {}, true),
+    h('hr', { class: 'sep' }),
+    dest.length ? subMenu('Move to', dest) : item('Move to', () => {}, true),
+    item('Delete', () => delEntry(e, g)));
+  ctxMenu.hidden = false;
+  const r = ctxMenu.getBoundingClientRect();
+  ctxMenu.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 4)) + 'px'; ctxMenu.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 4)) + 'px';
+  if (fromKeyboard) ctxMenu.querySelector('button').focus();
+}
+ctxMenu.addEventListener('keydown', (ev) => { // arrow keys move through the (sub) menu the focus is in
+  const menu = ev.target.closest('.popmenu');
+  const items = [...menu.querySelectorAll(':scope > button:not(:disabled), :scope > .subwrap > button')], i = items.indexOf(ev.target);
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); items[(i + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus(); }
+  else if (ev.key === 'ArrowLeft' && menu.classList.contains('sub')) { ev.preventDefault(); menu.hidden = true; menu.parentElement.firstChild.focus(); }
+});
+$('list').addEventListener('scroll', () => closeMenus());
+window.addEventListener('blur', () => closeMenus());
 
 // ---------- Add menu ----------
 const MENUS = [['btnAdd', 'addMenu'], ['brandBtn', 'logoMenu']];
-const closeMenus = () => { for (const [b, m] of MENUS) { $(m).hidden = true; $(b).setAttribute('aria-expanded', 'false'); } };
+const closeMenus = () => { for (const [b, m] of MENUS) { $(m).hidden = true; $(b).setAttribute('aria-expanded', 'false'); } $('ctxMenu').hidden = true; };
 for (const [b, m] of MENUS) {
   $(b).onclick = (e) => { e.stopPropagation(); const wasClosed = $(m).hidden; closeMenus(); $(m).hidden = !wasClosed; $(b).setAttribute('aria-expanded', String(wasClosed)); };
 }
@@ -303,8 +312,9 @@ $('addFolder').onclick = () => { closeMenus(); editFolder(null, selGroup); };
 $('mNew').onclick = () => { closeMenus(); newDatabase(); };
 $('mOpen').onclick = () => { closeMenus(); openDatabase(); };
 $('mLock').onclick = () => { closeMenus(); lock(); };
-$('mClose').onclick = () => { closeMenus(); lock(); };       // closing a database = back to the database list
-$('mSettings').onclick = () => { closeMenus(); appSettings(); };
+// Close database: lock it (asking about unsaved changes first) and take it off the list; back to the database list
+$('mClose').onclick = () => { closeMenus(); act(async () => { if (await call('db:close')) setState(null); }); };
+$('mSettings').onclick = () => { closeMenus(); act(() => call('popup:open', { kind: 'settings' })); };
 $('mAbout').onclick = () => { closeMenus(); act(() => openAbout()); };
 $('mQuit').onclick = () => { closeMenus(); act(() => call('app:quit')); };
 document.addEventListener('click', closeMenus);
@@ -344,7 +354,6 @@ async function openAbout(found) {
   if (found) offerUpdate(found);
   if (!$('aboutDlg').open) $('aboutDlg').showModal();
 }
-$('btnAbout').onclick = () => act(() => openAbout());
 kyuch.onUpdateAvailable((u) => act(() => openAbout(u)));
 
 $('updCheck').onclick = async () => {
