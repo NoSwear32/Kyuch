@@ -188,6 +188,9 @@ class Vault {
     for (const e of this.root.allEntries()) if (e.uuid.id === id) return e;
     throw new Error('Entry not found');
   }
+  owns(id) { return !!this.db.getGroup(id) || [...this.root.allEntries()].some((e) => e.uuid.id === id); } // does this id belong to this database?
+  // Copy an entry out of another open database (or this one) with everything it carries: custom fields, attachments, history, icon.
+  importEntry(groupId, src, id) { this.db.importEntry(src.entry(id), this.group(groupId), src.db); this.touch(); }
   inBin(item) { const b = this.bin; for (let g = item; g; g = g.parentGroup) if (g === b) return true; return false; }
 
   // ---- renderer-safe view (no passwords) ----

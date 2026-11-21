@@ -1,54 +1,66 @@
 // UI only. Passwords stay in the main process; this file only ever sees them when the user opens an entry.
 let S = null;                       // latest state from main (never contains passwords)
-let selGroup = null, selEntry = null, query = '';
+let selGroup = null, selEntry = null, selSet = new Set(), query = ''; // selSet = all selected entries (Ctrl/Shift-click); selEntry = the one shown on the right
 const expanded = new Set();
-let groups = new Map(), entries = new Map(); // id -> {g,parent} / {e,g}
+let groups = new Map(), entries = new Map(); // id -> {g,parent,db} / {e,g,db}   (db = path of the database it lives in)
 let reveal = null;                  // {id,text} while a password is shown in the detail pane
 
 // ---------- state ----------
 function setState(s) {
   S = s;
-  if (s) { applyTheme(s.cfg.theme); ICON_MAP = s.icons || {}; }
+  if (s) { applyCfg(s.cfg); ICON_MAP = Object.assign({}, ...s.dbs.map((d) => d.icons)); }
   $('lock').hidden = !!s; $('app').hidden = !s;
-  document.body.toggleAttribute('data-locked', !s); $('search').hidden = !s; // while locked the bar keeps only the logo menu and the window buttons
+  document.body.toggleAttribute('data-locked', !s); // while locked the bar keeps only the logo menu and the window buttons
   if (!s) {
     // Locking must not leave an open dialog (or a plaintext password field) on screen.
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
-    for (const id of ['nPw', 'nPw2']) $(id).value = '';
+    for (const id of ['nPw', 'nPw2', 'pwIn']) $(id).value = '';
     clearInterval(detailTimer); closeMenus();
-    query = ''; $('search').value = ''; selEntry = null; reveal = null; showRecent(); return;
+    query = ''; $('search').value = ''; $('searchWrap').classList.remove('open'); selEntry = null; selSet = new Set(); reveal = null; showRecent(); return;
   }
   groups = new Map(); entries = new Map();
-  const walk = (g, parent) => { groups.set(g.id, { g, parent }); g.entries.forEach((e) => entries.set(e.id, { e, g })); g.groups.forEach((c) => walk(c, g)); };
-  walk(s.root, null);
-  expanded.add(s.root.id);
-  if (!groups.has(selGroup)) selGroup = s.root.id;
+  const walk = (g, parent, db) => { groups.set(g.id, { g, parent, db }); g.entries.forEach((e) => entries.set(e.id, { e, g, db })); g.groups.forEach((c) => walk(c, g, db)); };
+  for (const d of s.dbs) { walk(d.root, null, d.path); expanded.add(d.root.id); }
+  if (!groups.has(selGroup)) selGroup = s.dbs[0].root.id;
   if (!entries.has(selEntry)) selEntry = null;
+  selSet = new Set([...selSet].filter((id) => entries.has(id)));
   render();
 }
 
+const dbOf = (id) => (groups.get(id) ?? entries.get(id))?.db;                     // path of the database an entry or folder is in
+const dbRec = (id) => S.dbs.find((d) => d.path === dbOf(id)) ?? S.dbs[0];
 const pathOf = (id) => { const out = []; for (let g = groups.get(id); g?.parent; g = groups.get(g.parent.id)) out.unshift(g.g.name); return out.join(' / '); };
 
 // ---------- render ----------
 function render() {
-  $('btnSave').textContent = S.dirty ? 'Save •' : 'Save';
-  $('status').textContent = `${S.path} · KDBX${S.legacy ? 3 : 4} · ${entries.size} entries`;
+  $('btnSave').toggleAttribute('data-dirty', S.dbs.some((d) => d.dirty));
+  const d = dbRec(selGroup);
+  $('status').textContent = `${d.path} · KDBX${d.legacy ? 3 : 4} · ${[...entries.values()].filter((x) => x.db === d.path).length} entries`;
   renderTree(); renderList(); renderDetail();
 }
 
 // Re-rendering replaces the DOM; if the keyboard focus was inside `el`, put it back on the selected item.
 const keepFocus = (el, sel, fn) => { const had = el.contains(document.activeElement); fn(); if (had) el.querySelector(sel)?.focus(); };
-const selectEntry = (id) => { selEntry = id; reveal = null; renderList(); renderDetail(); };
+const selectEntry = (id) => { selEntry = id; selSet = new Set([id]); reveal = null; renderList(); renderDetail(); };
+// Ctrl/Cmd-click adds or removes an entry, Shift-click selects the range from the entry shown on the right; a plain click selects just that one.
+function pickEntry(ev, id) {
+  if (ev.ctrlKey || ev.metaKey) { selSet.has(id) ? selSet.delete(id) : selSet.add(id); selEntry = selSet.has(id) ? id : ([...selSet].pop() ?? null); }
+  else if (ev.shiftKey && selEntry) {
+    const ids = visibleEntries().map(({ e }) => e.id), a = ids.indexOf(selEntry), b = ids.indexOf(id);
+    if (a >= 0 && b >= 0) selSet = new Set(ids.slice(Math.min(a, b), Math.max(a, b) + 1));
+  } else { selEntry = id; selSet = new Set([id]); }
+  reveal = null; renderList(); renderDetail();
+}
 const stepFocus = (ev, container, selector) => { // Up/Down: activate the neighbouring item
   const items = [...container.querySelectorAll(selector)], i = items.indexOf(ev.currentTarget), next = items[i + (ev.key === 'ArrowDown' ? 1 : -1)];
   if (next) { ev.preventDefault(); next.click(); }
 };
 
 function renderTree() {
-  const node = (g, isRoot) => {
+  const node = (g, isRoot, db) => {
     const open = expanded.has(g.id), kids = g.groups.length > 0;
     const row = h('div', {
-      class: 'node' + (g.id === selGroup && !query ? ' sel' : ''), draggable: isRoot || g.isBin ? null : 'true',
+      class: 'node' + (isRoot ? ' dbroot' : '') + (g.id === selGroup && !query ? ' sel' : ''), draggable: isRoot || g.isBin ? null : 'true',
       tabindex: '0', role: 'treeitem', 'aria-selected': String(g.id === selGroup && !query), 'aria-expanded': kids ? String(open) : null,
       onkeydown: (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.currentTarget.click(); }
@@ -56,17 +68,17 @@ function renderTree() {
         else if (ev.key === 'ArrowRight' && kids && !open) { expanded.add(g.id); keepFocus($('tree'), '.node.sel', renderTree); }
         else if (ev.key === 'ArrowLeft' && kids && open) { expanded.delete(g.id); keepFocus($('tree'), '.node.sel', renderTree); }
       },
-      onclick: () => { selGroup = g.id; selEntry = null; query = ''; $('search').value = ''; render(); },
+      onclick: () => { selGroup = g.id; selEntry = null; selSet = new Set(); query = ''; $('search').value = ''; render(); },
       ondragstart: (e) => e.dataTransfer.setData('text/plain', g.id),
       ondragover: (e) => { e.preventDefault(); row.classList.add('drop'); },
       ondragleave: () => row.classList.remove('drop'),
-      ondrop: (e) => { e.preventDefault(); row.classList.remove('drop'); move(e.dataTransfer.getData('text/plain'), g.id); },
+      ondrop: (e) => { e.preventDefault(); row.classList.remove('drop'); drop(e.dataTransfer.getData('text/plain').split('\n').filter(Boolean), g.id); },
     },
     h('span', { class: 'tw', onclick: (e) => { e.stopPropagation(); open ? expanded.delete(g.id) : expanded.add(g.id); renderTree(); } }, kids ? (open ? '▾' : '▸') : ''),
-    h('span', {}, iconNode(g, 48)), h('span', {}, g.name));
-    return h('div', {}, row, kids && open ? h('div', { class: 'kids' }, g.groups.map((c) => node(c))) : null);
+    h('span', {}, iconNode(g, 48)), h('span', {}, isRoot ? db.name + (db.dirty ? ' •' : '') : g.name));
+    return h('div', {}, row, kids && open ? h('div', { class: 'kids' }, g.groups.map((c) => node(c, false, db))) : null);
   };
-  keepFocus($('tree'), '.node.sel', () => $('tree').replaceChildren(node(S.root, true)));
+  keepFocus($('tree'), '.node.sel', () => $('tree').replaceChildren(...S.dbs.map((d) => node(d.root, true, d))));
 }
 
 function visibleEntries() {
@@ -84,20 +96,20 @@ function renderList() {
   const bar = query ? h('div', { class: 'muted bar' }, `Search results: ${rows.length}`) : h('div', { class: 'row bar' },
     h('strong', {}, iconNode(cur, 48), ' ' + cur.name),
     h('span', { class: 'muted grow' }, cur.notes),
-    h('button', { onclick: () => editFolder(cur.id) }, 'Folder settings'),
-    cur.id === S.root.id || cur.isBin ? null : h('button', { class: 'danger', onclick: () => delFolder(cur) }, 'Delete'));
+    ib('Folder settings', 'sliders', { onclick: () => editFolder(cur.id) }),
+    !groups.get(cur.id).parent || cur.isBin ? null : ib('Delete', 'folder-x', { class: 'danger', title: 'Delete folder', onclick: () => delFolder(cur) }));
   const table = rows.length ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Title'), h('th', {}, 'Username'), h('th', {}, query ? 'Folder' : 'URL'))),
     h('tbody', {}, rows.map(({ e, g }) => h('tr', {
-      class: e.id === selEntry ? 'sel' : '', draggable: 'true', tabindex: '0', 'aria-selected': String(e.id === selEntry),
+      class: selSet.has(e.id) ? 'sel' : '', draggable: 'true', tabindex: '0', 'aria-selected': String(selSet.has(e.id)),
       onkeydown: (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.currentTarget.click(); }
         else if (ev.key === 'F2') editEntry(e.id);
         else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') stepFocus(ev, $('list'), 'tbody tr');
       },
-      onclick: () => selectEntry(e.id),
+      onclick: (ev) => pickEntry(ev, e.id),
       ondblclick: () => editEntry(e.id),
       oncontextmenu: (ev) => entryMenu(ev, e, g),
-      ondragstart: (ev) => ev.dataTransfer.setData('text/plain', e.id),
+      ondragstart: (ev) => ev.dataTransfer.setData('text/plain', (selSet.has(e.id) ? [...selSet] : [e.id]).join('\n')),
     }, h('td', {}, iconNode(e, 0), ' ' + e.title), h('td', {}, e.username), h('td', {}, query ? pathOf(g.id) || g.name : e.url)))))
     : h('div', { class: 'empty' }, query ? 'No matches' : 'No entries here. Use Add, then Entry.');
   keepFocus($('list'), 'tr.sel', () => $('list').replaceChildren(bar, table));
@@ -117,31 +129,33 @@ function otpField(e) {
   };
   clearInterval(detailTimer); load();
   detailTimer = setInterval(() => { const left = Math.max(0, (expires - Date.now()) / 1000); bar.value = left; if (left <= 0 && !fetching) load(); }, 500);
-  return h('div', { class: 'field' }, h('label', {}, 'One-time password'), h('div', { class: 'v' }, codeEl, h('button', { onclick: () => copy(e.id, 'otp') }, 'Copy')), bar);
+  return h('div', { class: 'field' }, h('label', {}, 'One-time password'), h('div', { class: 'v' }, codeEl, ib('Copy', 'copy', { title: 'Copy the code', onclick: () => copy(e.id, 'otp') })), bar);
 }
 
 function renderDetail() {
   clearInterval(detailTimer);
+  if (selSet.size > 1) return $('detail').replaceChildren(h('div', { class: 'muted' }, `${selSet.size} entries selected. Right-click one to copy them to another folder or database.`));
   const hit = entries.get(selEntry);
   if (!hit) return $('detail').replaceChildren(h('div', { class: 'muted' }, 'Select an entry'));
   const { e, g } = hit;
   const field = (label, text, ...btns) => h('div', { class: 'field' }, h('label', {}, label), h('div', { class: 'v' }, h('span', {}, text), btns));
-  const pw = reveal?.id === e.id ? reveal.text : '••••••••';
+  const shown = reveal?.id === e.id, pw = shown ? reveal.text : '••••••••';
+  const copyBtn = (field) => ib('Copy', 'copy', { title: `Copy ${field}`, onclick: () => copy(e.id, field) });
   $('detail').replaceChildren(...[
     h('h2', {}, iconNode(e, 0), e.title),
     h('div', { class: 'muted' }, pathOf(g.id) || g.name),
-    field('Username', e.username, h('button', { onclick: () => copy(e.id, 'username') }, 'Copy')),
+    field('Username', e.username, copyBtn('username')),
     field('Password', pw,
-      h('button', { onclick: () => act(async () => { reveal = reveal?.id === e.id ? null : { id: e.id, text: (await call('entry:get', { id: e.id })).password }; renderDetail(); }) }, reveal?.id === e.id ? 'Hide' : 'Show'),
-      h('button', { onclick: () => copy(e.id, 'password') }, 'Copy')),
+      ib(shown ? 'Hide' : 'Show', shown ? 'eye-off' : 'eye', { title: shown ? 'Hide password' : 'Show password', onclick: () => act(async () => { reveal = shown ? null : { id: e.id, text: (await call('entry:get', { id: e.id })).password }; renderDetail(); }) }),
+      copyBtn('password')),
     e.hasOtp ? otpField(e) : null,
-    e.url ? field('URL', e.url, h('button', { onclick: () => copy(e.id, 'url') }, 'Copy'), h('button', { onclick: () => act(() => call('entry:open', { id: e.id })) }, 'Open')) : null,
-    e.notes ? field('Comments', e.notes) : null,
+    e.url ? field('URL', e.url, copyBtn('url'), ib('Open', 'open', { title: 'Open the URL in the browser', onclick: () => act(() => call('entry:open', { id: e.id })) })) : null,
     e.tags.length ? field('Tags', e.tags.join(', ')) : null,
     h('div', { class: 'actions' },
-      h('button', { class: 'primary', onclick: () => autoType(e.id) }, 'Auto-type'),
-      h('button', { onclick: () => editEntry(e.id) }, 'Edit'),
-      h('button', { class: 'danger', onclick: () => delEntry(e, g) }, 'Delete')),
+      ib('Auto-type', 'keyboard', { class: 'primary', onclick: () => autoType(e.id) }),
+      ib('Edit', 'edit', { onclick: () => editEntry(e.id) }),
+      ib('Delete', 'trash', { class: 'danger', title: 'Delete entry', onclick: () => delEntry(e, g) })),
+    e.notes ? h('div', { class: 'field' }, h('label', {}, 'Comments'), h('div', { class: 'v notesbox' }, e.notes)) : null, // below the buttons
   ].filter(Boolean));
 }
 
@@ -151,16 +165,30 @@ const autoType = (id) => act(() => call('entry:autotype', { id }));
 // A reply of null means "locked". If the page is already on the lock screen (the user locked while this was in flight), do not redo the lock-screen reset:
 // that would hide the unlock form they may already be typing into.
 const applyState = (s) => { if (s || S) setState(s); };
-const move = (id, toId) => act(async () => { if (id && id !== toId) { expanded.add(toId); applyState(await call('move', { id, toId })); } });
+// Dropping onto a folder: inside one database it moves, into another database it copies (folders cannot cross databases).
+const drop = (ids, toId) => act(async () => {
+  ids = ids.filter((id) => id !== toId); expanded.add(toId);
+  if (ids.some((id) => dbOf(id) !== dbOf(toId))) {
+    if (ids.some((id) => groups.has(id))) throw new Error('Folders cannot be copied into another database');
+    return copyTo(ids, toId);
+  }
+  for (const id of ids) applyState(await call('move', { id, toId }));
+});
+const move = (id, toId) => drop([id], toId);
+const copyTo = (ids, toId) => act(async () => { expanded.add(toId); applyState(await call('entry:copyTo', { ids, toId })); toast(`${ids.length === 1 ? 'Entry' : ids.length + ' entries'} copied`); });
 const update = (ch, arg) => act(async () => applyState(await call(ch, arg)));
 
 const inBin = (gid) => { for (let n = groups.get(gid); n; n = n.parent && groups.get(n.parent.id)) if (n.g.isBin) return true; return false; };
 function delEntry(e, g) {
-  const gone = inBin(g.id) || !S.binEnabled; // already in the bin, or this database has no bin: deleting is permanent
+  const gone = inBin(g.id) || !dbRec(g.id).binEnabled; // already in the bin, or this database has no bin: deleting is permanent
   if (confirm(gone ? `Permanently delete “${e.title}”? This cannot be undone.` : `Move “${e.title}” to the Recycle Bin?`)) update('entry:delete', { id: e.id });
 }
+function delEntries(ids) {
+  if (ids.length === 1) { const { e, g } = entries.get(ids[0]); return delEntry(e, g); }
+  if (confirm(`Delete ${ids.length} entries? Entries already in a Recycle Bin are deleted permanently; the others move to it.`)) act(async () => { for (const id of ids) applyState(await call('entry:delete', { id })); });
+}
 function delFolder(g) {
-  const gone = inBin(g.id) || !S.binEnabled;
+  const gone = inBin(g.id) || !dbRec(g.id).binEnabled;
   if (confirm(gone ? `Permanently delete folder “${g.name}” and everything in it? This cannot be undone.` : `Move folder “${g.name}” and everything in it to the Recycle Bin?`)) {
     selGroup = groups.get(g.id).parent.id; update('group:delete', { id: g.id });
   }
@@ -170,7 +198,7 @@ function delFolder(g) {
 const editEntry = (id) => act(() => call('popup:open', { kind: 'entry', id: id || undefined, groupId: id ? undefined : selGroup }));
 const editFolder = (id, parentId) => act(() => call('popup:open', { kind: 'folder', id: id || undefined, parentId: id ? undefined : parentId }));
 kyuch.onStateChanged((s) => { if (selGroup) expanded.add(selGroup); applyState(s); }); // a new folder is created inside the selected one: show it
-kyuch.onCfgChanged((c) => { applyTheme(c.theme); if (S) { S.cfg = c; armIdle(); } }); // Settings were applied in their own window
+kyuch.onCfgChanged((c) => { applyCfg(c); if (S) { S.cfg = c; armIdle(); } }); // Settings were applied in their own window
 kyuch.onActivity(() => { if (S) armIdle(); }); // typing in an editor window counts as activity for the idle auto-lock
 
 // ---------- lock screen ----------
@@ -217,11 +245,18 @@ $('unlockForm').onsubmit = (e) => {
     catch (err) { $('lockErr').textContent = err.message; $('unlockPw').select(); }
   });
 };
-// Open a database: when one is already open it is closed first (asking about unsaved changes), then the unlock form appears for the new one.
+// Open a database. With none open the unlock form on the lock screen asks for the password; with others open, a small dialog does, and the
+// new database is stacked in the folder tree next to the open ones.
 const openDatabase = () => act(async () => {
   const p = await call('pick:open'); if (!p) return;
-  if (S) { if (!(await call('db:lock'))) return; setState(null); }
-  pickUnlock(p);
+  if (!S) return pickUnlock(p);
+  $('pwName').textContent = nameOf(p);
+  for (let err = ''; ;) {
+    $('pwErr').textContent = err; $('pwIn').value = '';
+    if (!(await show($('pwDlg')))) return;
+    try { const s = await call('db:open', { path: p, password: $('pwIn').value }); $('pwIn').value = ''; if (s) { selGroup = s.dbs.at(-1).root.id; selEntry = null; setState(s); armIdle(); } return; }
+    catch (e) { if (e.message !== 'Wrong master password') throw e; err = e.message; }
+  }
 });
 $('btnOpenDb').onclick = openDatabase;
 const newDatabase = () => act(async () => {
@@ -233,7 +268,7 @@ const newDatabase = () => act(async () => {
   if ($('nPw').value !== $('nPw2').value) return toast('Passwords do not match', true);
   const s = await call('db:create', { path: p, password: $('nPw').value });
   $('nPw').value = $('nPw2').value = '';
-  if (s) { setState(s); armIdle(); }
+  if (s) { selGroup = s.dbs.at(-1).root.id; selEntry = null; setState(s); armIdle(); }
 });
 $('btnNewDb').onclick = newDatabase;
 
@@ -242,7 +277,7 @@ const lock = (auto) => act(async () => { if (await call('db:lock', { auto: auto 
 $('btnLock').onclick = () => lock();
 $('themeBtn').onclick = () => act(async () => {
   const next = await call('cfg:set', { ...(await call('cfg:get')), theme: isDark() ? 'light' : 'dark' });
-  applyTheme(next.theme);
+  applyCfg(next);
   if (S) S.cfg = next;
 });
 $('btnSave').onclick = () => update('db:save');
@@ -268,13 +303,21 @@ async function entryMenu(ev, e, g) {
   ev.preventDefault();
   const fromKeyboard = ev.clientX === 0 && ev.clientY === 0, row = ev.currentTarget.getBoundingClientRect();
   const x = fromKeyboard ? row.left + 24 : ev.clientX, y = fromKeyboard ? row.bottom : ev.clientY;
-  closeMenus(); selectEntry(e.id);
+  closeMenus(); if (!selSet.has(e.id)) selectEntry(e.id); // right-clicking inside the selection acts on all of it
+  const ids = [...selSet], multi = ids.length > 1;
   browserList ??= await call('browsers:list');
   const item = (label, fn, disabled) => h('button', { role: 'menuitem', disabled: disabled || null, onclick: () => { closeMenus(); fn(); } }, label);
   const open = (browser) => () => act(() => call('entry:open', { id: e.id, browser }));
-  const folders = [], walk = (n, depth) => { if (n.isBin) return; if (n.id !== g.id) folders.push([n, depth]); n.groups.forEach((c) => walk(c, depth + 1)); }; walk(S.root, 0);
-  const dest = folders.map(([n, depth]) => { const b = item('', () => move(e.id, n.id)); b.append(iconNode(n, 48), ' ' + n.name); b.style.paddingLeft = 10 + depth * 14 + 'px'; return b; });
-  ctxMenu.replaceChildren(
+  // folders to pick from: [folder, depth, label] for one database or for all of them (a database's root shows the database's name)
+  const folders = (only) => { const out = [], walk = (n, depth, label) => { if (n.isBin) return; out.push([n, depth, label]); n.groups.forEach((c) => walk(c, depth + 1, c.name)); }; S.dbs.filter((d) => !only || d.path === only).forEach((d) => walk(d.root, 0, d.name)); return out; };
+  const dest = (list, fn) => list.map(([n, depth, label]) => { const b = item('', () => fn(n.id)); b.append(iconNode(n, 48), ' ' + label); b.style.paddingLeft = 10 + depth * 14 + 'px'; return b; });
+  const copyMenu = subMenu('Copy to', dest(folders(), (to) => copyTo(ids, to)));      // any folder of any open database
+  ctxMenu.replaceChildren(...(multi ? [
+    h('div', { class: 'muted menuhead' }, `${ids.length} entries selected`),
+    copyMenu,
+    h('hr', { class: 'sep' }),
+    item('Delete', () => delEntries(ids)),
+  ] : [
     item('Edit entry', () => editEntry(e.id)),
     h('hr', { class: 'sep' }),
     item('Copy username', () => copy(e.id, 'username')),
@@ -284,8 +327,10 @@ async function entryMenu(ev, e, g) {
     item('Open URL', open(undefined), !e.url),
     e.url ? subMenu('Open with', browserList.map((b) => item(b.label, open(b.id)))) : item('Open with', () => {}, true),
     h('hr', { class: 'sep' }),
-    dest.length ? subMenu('Move to', dest) : item('Move to', () => {}, true),
-    item('Delete', () => delEntry(e, g)));
+    (() => { const list = folders(dbOf(g.id)).filter(([n]) => n.id !== g.id); return list.length ? subMenu('Move to', dest(list, (to) => move(e.id, to))) : item('Move to', () => {}, true); })(),
+    copyMenu,
+    item('Delete', () => delEntry(e, g)),
+  ]));
   ctxMenu.hidden = false;
   const r = ctxMenu.getBoundingClientRect();
   ctxMenu.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 4)) + 'px'; ctxMenu.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 4)) + 'px';
@@ -312,8 +357,8 @@ $('addFolder').onclick = () => { closeMenus(); editFolder(null, selGroup); };
 $('mNew').onclick = () => { closeMenus(); newDatabase(); };
 $('mOpen').onclick = () => { closeMenus(); openDatabase(); };
 $('mLock').onclick = () => { closeMenus(); lock(); };
-// Close database: lock it (asking about unsaved changes first) and take it off the list; back to the database list
-$('mClose').onclick = () => { closeMenus(); act(async () => { if (await call('db:close')) setState(null); }); };
+// Close database: closes the selected database (asking about unsaved changes first) and takes it off the list
+$('mClose').onclick = () => { closeMenus(); act(async () => { const r = await call('db:close', { db: dbOf(selGroup) }); if (r) setState(r.state); }); }; // the open database (the one whose folder is selected)
 $('mSettings').onclick = () => { closeMenus(); act(() => call('popup:open', { kind: 'settings' })); };
 $('mAbout').onclick = () => { closeMenus(); act(() => openAbout()); };
 $('mQuit').onclick = () => { closeMenus(); act(() => call('app:quit')); };
@@ -387,13 +432,18 @@ $('updInstall').onclick = async () => {
 $('updCancel').onclick = () => act(() => call('update:cancel'));
 $('aboutDlg').addEventListener('close', () => { if (downloading) call('update:cancel').catch(() => {}); }); // closing the dialog cancels a running download
 $('updRestart').onclick = () => act(() => call('app:relaunch'));
-$('search').oninput = (e) => { query = e.target.value.trim(); selEntry = null; render(); };
+// The magnifier grows into the search field; it shrinks back when it loses focus while empty, and Esc clears it.
+const expandSearch = () => { $('searchWrap').classList.add('open'); $('search').focus(); };
+$('btnSearch').onclick = expandSearch;
+$('search').onblur = () => { if (!$('search').value) $('searchWrap').classList.remove('open'); };
+$('search').onkeydown = (e) => { if (e.key === 'Escape') { $('search').value = ''; query = ''; selEntry = null; selSet = new Set(); render(); $('search').blur(); } };
+$('search').oninput = (e) => { query = e.target.value.trim(); selEntry = null; selSet = new Set(); render(); };
 
 document.addEventListener('keydown', (e) => {
   if (!S || document.querySelector('dialog[open]')) return;
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey, typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
   if (ctrl && k === 's') { e.preventDefault(); update('db:save'); }
-  else if (ctrl && k === 'f') { e.preventDefault(); $('search').focus(); }
+  else if (ctrl && k === 'f') { e.preventDefault(); expandSearch(); }
   else if (ctrl && k === 'l') { e.preventDefault(); lock(); }
   else if (ctrl && k === 'n') { e.preventDefault(); e.shiftKey ? editFolder(null, selGroup) : editEntry(null); }
   else if (selEntry && ctrl && k === 'b') { e.preventDefault(); copy(selEntry, 'username'); }
@@ -411,4 +461,4 @@ function armIdle() {
 }
 for (const ev of ['mousemove', 'keydown', 'mousedown']) document.addEventListener(ev, () => S && armIdle(), { passive: true });
 
-act(async () => { applyTheme((await call('cfg:get')).theme); const s = await call('state'); setState(s); if (s) armIdle(); });
+act(async () => { applyCfg(await call('cfg:get')); const s = await call('state'); setState(s); if (s) armIdle(); });

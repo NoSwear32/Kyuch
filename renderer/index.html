@@ -27,17 +27,17 @@
   </div>
   <div id="tools">
     <div class="menuwrap needs-db">
-      <button id="btnAdd" aria-haspopup="menu" aria-expanded="false">Add ▾</button>
+      <button id="btnAdd" data-i="add" aria-haspopup="menu" aria-expanded="false">Add</button>
       <div id="addMenu" class="popmenu" role="menu" hidden>
         <button id="addEntry" role="menuitem">Entry</button>
         <button id="addFolder" role="menuitem">Folder</button>
       </div>
     </div>
-    <button id="btnSave" class="needs-db" title="Save (Ctrl+S)">Save</button>
-    <button id="btnLock" class="needs-db" title="Lock (Ctrl+L)">Lock</button>
-    <button id="btnGen" class="needs-db" title="Password generator">Generator</button>
+    <button id="btnSave" data-i="save" class="needs-db" title="Save (Ctrl+S)">Save</button>
+    <button id="btnLock" data-i="lock" class="needs-db" title="Lock (Ctrl+L)">Lock</button>
+    <button id="btnGen" data-i="dice" class="needs-db" title="Password generator">Generator</button>
   </div>
-  <input id="search" class="needs-db" type="search" placeholder="Search (Ctrl+F)" hidden>
+  <div id="searchWrap" class="needs-db"><button id="btnSearch" data-i="search" class="keep-icon" title="Search (Ctrl+F)">Search</button><input id="search" type="search" placeholder="Search" aria-label="Search"></div>
   <div id="winctl">
     <button id="wMin" title="Minimize" aria-label="Minimize"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
     <button id="wMax" title="Maximize" aria-label="Maximize"><svg class="max" width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1.9" fill="none" stroke="currentColor" stroke-width="1.5"/></svg><svg class="rest" width="12" height="12" viewBox="0 0 12 12" hidden><rect x="2" y="4" width="5.8" height="5.8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.4 3.6V3.4A1.4 1.4 0 0 1 5.8 2h2.8A1.4 1.4 0 0 1 10 3.4v2.8a1.4 1.4 0 0 1-1.4 1.4h-.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
@@ -98,6 +98,16 @@
     <p>“<span id="rmName"></span>” will be removed from this list. The database file itself is not deleted; you can add it again with Open file.</p>
     <label class="check"><input type="checkbox" id="rmAsk"> Don't show this again (you can turn it back on in Settings)</label>
     <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Remove</button></menu>
+  </form>
+</dialog>
+
+<dialog id="pwDlg">
+  <form method="dialog" id="pwForm">
+    <h2>Open database</h2>
+    <div class="muted" id="pwName"></div>
+    <label>Master password <input id="pwIn" type="password" autocomplete="off" required></label>
+    <p class="error" id="pwErr"></p>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Open</button></menu>
   </form>
 </dialog>
 

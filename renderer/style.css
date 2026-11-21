@@ -33,7 +33,6 @@ input, textarea, select { width: 100%; } input[type=checkbox] { width: auto; }
 .brand { height: 18px; margin-right: 8px; }
 #tools { display: flex; gap: 4px; flex: 1; align-items: center; }
 #tools button { background: transparent; padding: 3px 11px; } #tools button:hover { background: var(--hover); }
-#search { max-width: 240px; margin-right: 6px; padding: 3px 10px; }
 .menuwrap { position: relative; }
 .popmenu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 30; }
 .popmenu button { display: block; width: 100%; text-align: left; background: transparent; }
@@ -169,3 +168,22 @@ body.genwin { grid-template-rows: auto minmax(0, 1fr); }
 body.genwin dialog { position: static; display: block; width: auto; max-height: none; margin: 0; border: 0; border-radius: 0; background: transparent; padding: 16px; overflow: auto; }
 body.genwin dialog h2 { display: none; }
 body.editor #toast { bottom: 84px; }
+
+/* button icons / letters (Settings > Accessibility) */
+.bi { display: none; width: 16px; height: 16px; flex: none; vertical-align: -3px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+body[data-buttons="icons"] .bi, .keep-icon .bi { display: inline-block; }
+body[data-buttons="icons"] .bl, .keep-icon .bl { display: none; }
+body[data-buttons="icons"] button:has(> .bi) { padding-inline: 8px; }
+button[data-dirty]::after { content: "•"; margin-left: 4px; }
+#btnAdd::after { content: "▾"; margin-left: 4px; font-size: 11px; }
+/* the search button grows into the search field */
+#searchWrap { display: flex; align-items: center; margin-right: 6px; }
+#search { width: 0; padding-inline: 0; border-width: 0; opacity: 0; transition: width .18s ease, opacity .18s ease; }
+#searchWrap.open #search { width: 220px; padding: 3px 10px; border-width: 1px; opacity: 1; }
+#searchWrap #btnSearch { background: transparent; } #searchWrap #btnSearch:hover { background: var(--hover); }
+/* the database roots stacked in the folder tree */
+.node.dbroot { font-weight: 600; margin-top: 4px; }
+.notesbox { white-space: pre-wrap; }
+.popmenu .menuhead { padding: 4px 10px; }
+.tabpanels { margin-top: 12px; }
+.tabs button[hidden] { display: none; }

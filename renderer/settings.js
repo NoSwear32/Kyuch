@@ -5,15 +5,20 @@ const closeMe = () => call('popup:close').catch(() => {});
 (async function boot() {
   let cfg, s, info, list;
   try { [cfg, s, info, list] = await Promise.all([call('cfg:get'), call('state'), call('app:info'), call('browsers:list')]); } catch (e) { document.body.textContent = e.message; return; }
-  applyTheme(cfg.theme);
+  applyCfg(cfg);
   $('edX').onclick = $('edCancel').onclick = closeMe;
   document.addEventListener('keydown', (e) => e.key === 'Escape' && closeMe());
   watchActivity();
 
   $('aLock').value = cfg.autoLockMin; $('aDelay').value = cfg.altTabDelayMs; $('aAutoUpd').checked = cfg.autoUpdateCheck !== false;
   $('aTray').checked = cfg.closeToTray !== false; $('aTrayLock').checked = cfg.lockOnTray !== false; $('aConfirmRm').checked = cfg.confirmRemoveDb !== false;
-  $('aPwBox').hidden = !s;                                    // the master password belongs to an open database
-  $('dbInfo').hidden = !s; if (s) $('dbInfo').textContent = `${s.name} — ${s.path} — KDBX${s.legacy ? 3 : 4}`;
+  $('tabSecurity').hidden = !s;                               // the master password belongs to an open database
+  if (s) $('aPwDb').replaceChildren(...s.dbs.map((d) => h('option', { value: d.path }, `${d.name} — ${d.path} — KDBX${d.legacy ? 3 : 4}`)));
+  $('aButtons').value = cfg.buttonStyle === 'text' ? 'text' : 'icons';
+  for (const t of document.querySelectorAll('[data-tab]')) t.onclick = () => {
+    document.querySelectorAll('[data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b === t)));
+    document.querySelectorAll('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== t.dataset.tab));
+  };
   $('aLayoutWrap').hidden = info.platform === 'win32'; $('aLayout').value = cfg.keyboardLayout || 'auto';
   $('aBrowser').replaceChildren(...list.map((b) => h('option', { value: b.id }, b.label)));
   $('aBrowser').value = list.some((b) => b.id === cfg.browser) ? cfg.browser : 'system';
@@ -44,10 +49,10 @@ const closeMe = () => call('popup:close').catch(() => {});
     try {
       await call('cfg:set', {
         autoLockMin: $('aLock').value, altTabDelayMs: $('aDelay').value, theme: chosen, autoUpdateCheck: $('aAutoUpd').checked, keyboardLayout: $('aLayout').value,
-        closeToTray: $('aTray').checked, lockOnTray: $('aTrayLock').checked, confirmRemoveDb: $('aConfirmRm').checked, browser: $('aBrowser').value,
+        closeToTray: $('aTray').checked, lockOnTray: $('aTrayLock').checked, confirmRemoveDb: $('aConfirmRm').checked, browser: $('aBrowser').value, buttonStyle: $('aButtons').value,
       });
       if (s && $('aNewPw').value) {
-        await call('db:changePassword', { password: $('aNewPw').value });
+        await call('db:changePassword', { password: $('aNewPw').value, db: $('aPwDb').value });
         $('aNewPw').value = $('aNewPw2').value = '';
         toast('Master password changed'); setTimeout(closeMe, 900); return;
       }

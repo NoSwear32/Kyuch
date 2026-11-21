@@ -23,11 +23,11 @@ const updater = createUpdater({ api: UPDATE_API, current: app.getVersion(), publ
 const canSelfInstall = () => app.isPackaged && (process.platform === 'win32' || process.execPath.startsWith('/opt/Kyuch/'));
 let typing = false, pendingUpdate = null, download = null, pendingSave = null; // download = AbortController of the transfer in progress
 
-let win, vault = null, clipTimer = null, clipText = null;
+let win, vaults = [], clipTimer = null, clipText = null;
 
 // ---- app-level config (not in the database) ----
 const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
-let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: true, lastUpdateCheck: 0, keyboardLayout: 'auto', closeToTray: true, lockOnTray: true, browser: 'system', confirmRemoveDb: true };
+let cfg = { recent: [], autoLockMin: 5, altTabDelayMs: 500, theme: 'system', autoUpdateCheck: true, lastUpdateCheck: 0, keyboardLayout: 'auto', closeToTray: true, lockOnTray: true, browser: 'system', confirmRemoveDb: true, buttonStyle: 'icons' };
 try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; } catch { /* first run */ }
 delete cfg.typeStartDelay; // pre-0.3.2 setting, was in seconds
 // Native widgets (file dialogs, message boxes) follow the dark/light kind of the chosen theme.
@@ -55,31 +55,35 @@ function copy(text, seconds) {
   if (seconds > 0) clipTimer = setTimeout(clearClipboard, seconds * 1000);
 }
 
+// ---- open databases: any number can be open at once; ids (UUIDs) say which one an action is about ----
+const V = (id) => { const v = vaults.find((x) => x.owns(id)); if (!v) throw new Error('Not found (is the database locked?)'); return v; };
+const byPath = (p) => { const v = vaults.find((x) => x.path === p); if (!v) throw new Error('That database is not open'); return v; };
+
 // ---- unsaved changes: never silently drop edits ----
-async function canLeave() {
+async function canLeave(list = vaults) {
   if (pendingSave) await pendingSave.catch(() => {}); // a save that is still writing decides whether there is anything left to ask about
-  if (!vault?.dirty) return true;
-  const { response } = await dialog.showMessageBox(win, {
-    type: 'warning', message: 'Save changes to the database?', detail: vault.path,
-    buttons: ['Save', "Don't save", 'Cancel'], defaultId: 0, cancelId: 2,
-  });
-  if (response === 2) return false;
-  if (response === 0) {
-    try { await vault.save(); } catch (e) { dialog.showErrorBox('Could not save the database', e.message); return false; } // stay open so nothing is lost
+  for (const v of list.filter((x) => x.dirty)) {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning', message: `Save changes to “${v.db.meta.name}”?`, detail: v.path,
+      buttons: ['Save', "Don't save", 'Cancel'], defaultId: 0, cancelId: 2,
+    });
+    if (response === 2) return false;
+    if (response === 0) {
+      try { await v.save(); } catch (e) { dialog.showErrorBox('Could not save the database', e.message); return false; } // stay open so nothing is lost
+    }
   }
   return true;
 }
 
-const state = () => vault && {
-  name: vault.db.meta.name, path: vault.path, dirty: vault.dirty, legacy: vault.legacy, binEnabled: vault.binEnabled, defaults: DEFAULTS, root: vault.tree(), icons: vault.icons(), cfg,
-};
+const dbState = (v) => ({ name: v.db.meta.name, path: v.path, dirty: v.dirty, legacy: v.legacy, binEnabled: v.binEnabled, root: v.tree(), icons: v.icons() });
+const state = () => vaults.length ? { dbs: vaults.map(dbState), defaults: DEFAULTS, cfg } : null;
 
 // Idle auto-lock must never wait on a modal (the user is away): save atomically, then lock. Everything else asks about unsaved changes first.
 async function lockVault(auto) {
-  if (auto && vault?.dirty) { try { await vault.save(); } catch { /* fall back to the prompt below */ } }
+  if (auto) for (const v of vaults.filter((x) => x.dirty)) { try { await v.save(); } catch { /* fall back to the prompt below */ } }
   if (!(await canLeave())) return false;
   clearClipboard(); closePopups(); // an open editor holds plaintext passwords
-  vault = null;
+  vaults = [];
   return true;
 }
 
@@ -104,7 +108,7 @@ function ensureTray() {
 function dropTray() { if (tray && !tray.isDestroyed()) tray.destroy(); tray = null; }
 async function hideToTray() {
   closePopups();
-  if (cfg.lockOnTray && vault) { if (!(await lockVault(false))) return; win.webContents.send('app:locked'); } // a hidden window must not hold an open vault
+  if (cfg.lockOnTray && vaults.length) { if (!(await lockVault(false))) return; win.webContents.send('app:locked'); } // a hidden window must not hold an open vault
   win.hide();
 }
 async function quitApp() {
@@ -126,7 +130,7 @@ async function confirmReplace(p, typed) {
 const needApproved = (p) => { if (!approved.has(p)) throw new Error('That file was not chosen in a file dialog'); };
 
 async function adopt(v) {
-  vault = v;
+  vaults.push(v);
   remember(v.path);
   if (v.legacy) {
     const { response } = await dialog.showMessageBox(win, {
@@ -149,6 +153,7 @@ const handlers = {
     if (['auto', 'us', 'gb'].includes(c.keyboardLayout)) next.keyboardLayout = c.keyboardLayout;
     if (THEMES.some((t) => t.id === c.theme)) next.theme = c.theme;
     for (const k of ['autoUpdateCheck', 'closeToTray', 'lockOnTray', 'confirmRemoveDb']) if (typeof c[k] === 'boolean') next[k] = c[k];
+    if (['icons', 'text'].includes(c.buttonStyle)) next.buttonStyle = c.buttonStyle;
     if (browsers.IDS.has(c.browser)) next.browser = c.browser;       // only ids from the fixed browser table, never a command
     cfg = next;
     applyTheme(); saveCfg();
@@ -158,13 +163,13 @@ const handlers = {
   },
   'browsers:list': () => [{ id: 'system', label: 'System default' }, ...browsers.detect().map(({ id, label }) => ({ id, label }))],
   'recent:remove': ({ path: p }) => { forget(p); return cfg; },
-  // "Close database": lock it (asking about unsaved changes first) and take it off the list of databases
-  'db:close': async () => {
-    if (!vault) return true;
-    const p = vault.path;
-    if (!(await lockVault(false))) return false;
-    forget(p);
-    return true;
+  // "Close database": close one open database (asking about unsaved changes first) and take it off the list of databases
+  'db:close': async ({ db }) => {
+    const v = byPath(db);
+    if (!(await canLeave([v]))) return false;
+    closePopups(); vaults = vaults.filter((x) => x !== v); forget(v.path);
+    if (!vaults.length) clearClipboard();
+    return { state: state() };
   },
   'app:quit': () => quitApp(),
   'clip:copy': ({ text }) => copy(String(text), DEFAULTS.clipboardClear), // generator output; auto-clears like entry passwords
@@ -221,29 +226,28 @@ const handlers = {
     if (img.isEmpty()) throw new Error('That file could not be read as a PNG or JPEG image');
     const { width, height } = img.getSize(), side = Math.min(width, height);
     img = img.crop({ x: Math.floor((width - side) / 2), y: Math.floor((height - side) / 2), width: side, height: side }).resize({ width: 64, height: 64, quality: 'best' });
-    const id = vault.addIcon(img.toPNG(), path.basename(r.filePaths[0]));
-    const s = state();
-    win?.webContents.send('state:changed', s); // the main window's icon list is now stale too
-    return { ...s, newIcon: id };
+    const v = ctxV(ctxOf(e)), id = v.addIcon(img.toPNG(), path.basename(r.filePaths[0]));
+    win?.webContents.send('state:changed', state()); // the main window's icon list is now stale too
+    return { icons: v.icons(), newIcon: id };
   },
 
   // ---- popup windows (entry/folder editor, Settings, password generator) ----
   'popup:open': ({ kind, id, groupId, parentId }) => { openPopup({ kind, id: id || null, groupId: groupId || null, parentId: parentId || null }); },
   'popup:close': (_a, e) => { const w = BrowserWindow.fromWebContents(e.sender); if (w && popupCtx.has(e.sender.id)) w.close(); },
   'editor:init': (_a, e) => {
-    const c = ctxOf(e);
-    const base = { kind: c.kind, id: c.id, cfg, icons: vault.icons(), legacy: vault.legacy, defaults: DEFAULTS };
+    const c = ctxOf(e), v = ctxV(c);
+    const base = { kind: c.kind, id: c.id, cfg, icons: v.icons(), legacy: v.legacy, defaults: DEFAULTS };
     if (c.kind === 'entry') {
-      const group = c.id ? vault.entry(c.id).parentGroup : vault.group(c.groupId);
-      return { ...base, groupId: group.uuid.id, entry: c.id ? vault.getEntry(c.id) : null, inheritedSeq: resolveAll(group).autoTypeSeq };
+      const group = c.id ? v.entry(c.id).parentGroup : v.group(c.groupId);
+      return { ...base, groupId: group.uuid.id, entry: c.id ? v.getEntry(c.id) : null, inheritedSeq: resolveAll(group).autoTypeSeq };
     }
-    const g = c.id ? vault.group(c.id) : null, parent = g ? g.parentGroup : vault.group(c.parentId);
-    return { ...base, parentId: parent?.uuid.id ?? null, g: g ? findNode(vault.tree(), c.id) : null, parentEff: parent ? resolveAll(parent) : null };
+    const g = c.id ? v.group(c.id) : null, parent = g ? g.parentGroup : v.group(c.parentId);
+    return { ...base, parentId: parent?.uuid.id ?? null, g: g ? findNode(v.tree(), c.id) : null, parentEff: parent ? resolveAll(parent) : null };
   },
   'editor:save': ({ props }, e) => {
-    const c = ctxOf(e), w = BrowserWindow.fromWebContents(e.sender);
-    if (c.kind === 'entry') { if (c.id) vault.updateEntry(c.id, props); else vault.addEntry(c.groupId || vault.root.uuid.id, props); }
-    else if (c.id) vault.updateGroup(c.id, props); else vault.addGroup(c.parentId || vault.root.uuid.id, props);
+    const c = ctxOf(e), v = ctxV(c), w = BrowserWindow.fromWebContents(e.sender);
+    if (c.kind === 'entry') { if (c.id) v.updateEntry(c.id, props); else v.addEntry(c.groupId || v.root.uuid.id, props); }
+    else if (c.id) v.updateGroup(c.id, props); else v.addGroup(c.parentId || v.root.uuid.id, props);
     win?.webContents.send('state:changed', state());
     setImmediate(() => w && !w.isDestroyed() && w.close());       // after this reply has been delivered
     return true;
@@ -267,12 +271,12 @@ const handlers = {
   'db:create': async ({ path: p, password }) => {
     needApproved(p);
     if (!password) throw new Error('Master password cannot be empty');
-    if (!(await canLeave())) return null;
+    if (vaults.some((x) => x.path === p)) throw new Error('That database is already open');
     return adopt(await Vault.create(p, password, path.basename(p, '.kdbx')));
   },
   'db:open': async ({ path: p, password }) => {
     needApproved(p);
-    if (vault && vault.path !== p && !(await canLeave())) return null;
+    if (vaults.some((x) => x.path === p)) throw new Error('That database is already open');
     let v;
     try { v = await Vault.open(p, password); } catch (e) {
       if (e.code === 'ENOENT') throw new Error('That database file no longer exists');       // never echo the file path
@@ -281,37 +285,43 @@ const handlers = {
     }
     return adopt(v);
   },
-  'db:save': async () => {
-    pendingSave = vault.save();
+  'db:save': async () => { // every database with unsaved changes
+    pendingSave = Promise.all(vaults.filter((v) => v.dirty).map((v) => v.save()));
     try { await pendingSave; } finally { pendingSave = null; }
     return state();
   },
-  'db:saveAs': async () => {
-    const r = await dialog.showSaveDialog(win, { title: 'Save a copy', defaultPath: vault.path, filters });
-    if (r.canceled) return state();
-    const p = kdbxPath(r.filePath);
-    if (await confirmReplace(p, r.filePath)) await vault.save(p, { copy: true }); // a copy: the open database stays the open database
-    return state();
-  },
   'db:lock': ({ auto } = {}) => lockVault(auto),
-  'db:changePassword': async ({ password }) => {
+  'db:changePassword': async ({ password, db }) => {
     if (!password) throw new Error('Master password cannot be empty');
-    await vault.changePassword(password);
-    await vault.save();
+    const v = byPath(db);
+    await v.changePassword(password);
+    await v.save();
     const s = state();
     win?.webContents.send('state:changed', s);                        // asked from the Settings window: tell the main window
     return s;
   },
 
-  'group:add': ({ parentId, ...p }) => (vault.addGroup(parentId, p), state()),
-  'group:update': ({ id, ...p }) => (vault.updateGroup(id, p), state()),
-  'group:delete': ({ id }) => (vault.deleteGroup(id), state()),
-  'move': ({ id, toId }) => (vault.move(id, toId), state()),
-  'entry:add': ({ groupId, ...p }) => (vault.addEntry(groupId, p), state()),
-  'entry:update': ({ id, ...p }) => (vault.updateEntry(id, p), state()),
-  'entry:delete': ({ id }) => (vault.deleteEntry(id), state()),
-  'entry:get': ({ id }) => vault.getEntry(id),
-  'entry:otp': ({ id }) => vault.otpInfo(id),
+  'group:add': ({ parentId, ...p }) => (V(parentId).addGroup(parentId, p), state()),
+  'group:update': ({ id, ...p }) => (V(id).updateGroup(id, p), state()),
+  'group:delete': ({ id }) => (V(id).deleteGroup(id), state()),
+  'move': ({ id, toId }) => {
+    const v = V(id);
+    if (v !== V(toId)) throw new Error('Use Copy to put an entry into another database');
+    v.move(id, toId); return state();
+  },
+  // copy one or more entries (possibly from several databases) into a folder of any open database; passwords never pass through the page
+  'entry:copyTo': ({ ids, toId }) => {
+    if (!Array.isArray(ids) || !ids.length) throw new Error('Nothing to copy');
+    const to = V(toId), srcs = ids.map((id) => [V(id), id]);
+    srcs.forEach(([v, id]) => v.entry(id));                           // check everything first, so a bad id copies nothing
+    for (const [v, id] of srcs) to.importEntry(toId, v, id);
+    return state();
+  },
+  'entry:add': ({ groupId, ...p }) => (V(groupId).addEntry(groupId, p), state()),
+  'entry:update': ({ id, ...p }) => (V(id).updateEntry(id, p), state()),
+  'entry:delete': ({ id }) => (V(id).deleteEntry(id), state()),
+  'entry:get': ({ id }) => V(id).getEntry(id),
+  'entry:otp': ({ id }) => V(id).otpInfo(id),
   // live preview while editing: validates input (bare secret or otpauth:// link) and returns the normalized link + current code
   'otp:preview': ({ input, digits, period, algorithm }) => {
     const c = totp.parse(input, { digits, period, algorithm });
@@ -320,23 +330,23 @@ const handlers = {
 
   'entry:copy': ({ id, field }) => {
     if (field === 'otp') { // copy the current code, not the secret
-      const c = vault.otpInfo(id);
+      const c = V(id).otpInfo(id);
       if (!c) throw new Error('This entry has no one-time password');
-      return copy(c.code, vault.clipboardClear(id));
+      return copy(c.code, V(id).clipboardClear(id));
     }
     const f = { username: 'UserName', password: 'Password', url: 'URL' }[field];
     if (!f) throw new Error('Unknown field');
-    copy(vault.secret(id, f), vault.clipboardClear(id));
+    copy(V(id).secret(id, f), V(id).clipboardClear(id));
   },
   'entry:open': ({ id, browser }) => { // `browser`: one-off choice from the "Open with" menu; otherwise the one chosen in Settings
-    let u = vault.secret(id, 'URL').trim();
+    let u = V(id).secret(id, 'URL').trim();
     if (!/^[a-z][a-z0-9+.-]*:/i.test(u)) u = 'https://' + u;
     if (browser !== undefined && !browsers.IDS.has(browser)) throw new Error('Unknown browser');
     return browsers.openUrl(u, browser ?? cfg.browser, shell);
   },
   'entry:autotype': async ({ id }) => {
     if (typing) throw new Error('Auto-type is already running');
-    const t = vault.typeInfo(id);
+    const t = V(id).typeInfo(id);
     if (!t.enabled) throw new Error('Auto-type is disabled for this entry or its folder');
     const actions = autotype.parse(t.seq, t.fields); // validate before hiding the window
     // Every auto-type starts with Alt+Tab, which selects the previous window; the short pause lets that window take focus.
@@ -356,7 +366,7 @@ const NEEDS_VAULT = /^(group:|entry:|editor:|move$|db:save|db:changePassword|ico
 for (const [ch, fn] of Object.entries(handlers)) {
   ipcMain.handle(ch, async (_e, arg) => {
     try {
-      if (NEEDS_VAULT.test(ch) && !vault) throw new Error('The database is locked'); return { ok: true, data: await fn(arg, _e) }; } catch (e) { return { ok: false, error: e.message }; }
+      if (NEEDS_VAULT.test(ch) && !vaults.length) throw new Error('The database is locked'); return { ok: true, data: await fn(arg, _e) }; } catch (e) { return { ok: false, error: e.message }; }
   });
 }
 
@@ -391,7 +401,7 @@ function hardenWindow(w) {
 const POPUPS = {
   entry: { page: 'editor.html', width: 640, height: 800, needsVault: true },
   folder: { page: 'editor.html', width: 600, height: 720, needsVault: true },
-  settings: { page: 'settings.html', width: 640, height: 800 },
+  settings: { page: 'settings.html', width: 640, height: 680 },
   generator: { page: 'genwin.html', width: 520, height: 640 },
 };
 let popup = null;                  // the one open popup window (modal over the main window)
@@ -399,9 +409,7 @@ const popupCtx = new Map();        // webContents id -> what that window is for;
 function openPopup(ctx) {
   const spec = POPUPS[ctx.kind];
   if (!spec) throw new Error('Unknown window');
-  if (spec.needsVault && !vault) throw new Error('The database is locked');
-  if (ctx.kind === 'entry' && ctx.id) vault.entry(ctx.id);       // throws if it does not exist
-  if (ctx.kind === 'folder' && ctx.id) vault.group(ctx.id);
+  if (spec.needsVault) { if (!vaults.length) throw new Error('The database is locked'); V(ctx.id || ctx.groupId || ctx.parentId); } // throws if it does not exist
   if (popup && !popup.isDestroyed()) { popup.focus(); return; }
   const pb = win.getBounds();
   const w = new BrowserWindow({
@@ -417,7 +425,8 @@ function openPopup(ctx) {
   w.loadFile('renderer/' + spec.page);
 }
 const closePopups = () => { if (popup && !popup.isDestroyed()) popup.close(); };
-const ctxOf = (e) => { const c = popupCtx.get(e.sender.id); if (!c || !vault) throw new Error('This window is no longer needed'); return c; };
+const ctxOf = (e) => { const c = popupCtx.get(e.sender.id); if (!c || !vaults.length) throw new Error('This window is no longer needed'); return c; };
+const ctxV = (c) => V(c.id || c.groupId || c.parentId);   // the database an editor window is working in
 const findNode = (n, id) => (n.id === id ? n : n.groups.reduce((f, c) => f || findNode(c, id), null));
 
 if (gotLock) app.whenReady().then(() => {

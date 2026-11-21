@@ -325,3 +325,19 @@ test('concurrent saves are serialized: all succeed, nothing is left over, the la
   assert.equal(v.dirty, false);
   fsx.rmSync(dir, { recursive: true, force: true });
 });
+
+test('importEntry copies an entry between databases with everything it carries; owns() tells them apart', async () => {
+  const a = await Vault.create(tmp + '.a', 'pa'), b = await Vault.create(tmp + '.b', 'pb');
+  try {
+    const id = a.addEntry(a.root.uuid.id, { title: 'T', username: 'u', password: 'secret', notes: 'n', tags: ['x'], otp: 'otpauth://totp/X?secret=JBSWY3DPEHPK3PXP', icon: 7 });
+    a.entry(id).fields.set('Custom', 'kept');                       // a field this app has no UI for must survive the copy
+    b.importEntry(b.root.uuid.id, a, id);
+    const copy = b.root.entries[0];
+    assert.equal(b.getEntry(copy.uuid.id).password, 'secret');
+    assert.equal(b.getEntry(copy.uuid.id).otp, a.getEntry(id).otp);
+    assert.equal(copy.fields.get('Custom'), 'kept');
+    assert.notEqual(copy.uuid.id, id);
+    assert.ok(a.owns(id) && !b.owns(id) && b.owns(copy.uuid.id) && b.owns(b.root.uuid.id) && !a.owns(b.root.uuid.id));
+    assert.equal(a.root.entries.length, 1, 'the original stays');
+  } finally { fs.rmSync(tmp + '.a', { force: true }); fs.rmSync(tmp + '.b', { force: true }); }
+});

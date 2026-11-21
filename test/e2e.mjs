@@ -50,7 +50,7 @@ const openWin = async (action, ready, a = app) => {
 };
 const openEditor = (action) => openWin(action, '#entryForm:not([hidden]), #folderForm:not([hidden])');
 const viaLogoMenu = (id, pg = page) => async () => { await pg.click('#brandBtn'); await pg.click(id); };
-const settingsWin = (a = app, pg = page) => openWin(viaLogoMenu('#mSettings', pg), '#aThemes .theme-card', a);
+const settingsWin = (a = app, pg = page) => openWin(viaLogoMenu('#mSettings', pg), '#tabGeneral', a);
 const genWin = () => openWin(() => page.click('#btnGen'), '#genDlg[open]');
 const addEntryWin = () => openEditor(async () => { await page.click('#btnAdd'); await page.click('#addEntry'); });
 const addFolderWin = () => openEditor(async () => { await page.click('#btnAdd'); await page.click('#addFolder'); });
@@ -96,7 +96,15 @@ ok(await app.evaluate(({ clipboard }) => clipboard.readText()) === 's3cret!', 'c
 await shot('main');
 
 // search + save + lock + unlock
-await page.fill('#search', 'octo'); ok((await page.textContent('#list')).includes('Work / Deep'), 'search finds entry with folder path'); await page.fill('#search', '');
+const sw = () => page.evaluate(() => Math.round(document.getElementById('search').getBoundingClientRect().width));
+ok((await sw()) === 0 && await page.isVisible('#btnSearch'), 'search is a magnifying glass until pressed');
+await page.click('#btnSearch'); await page.waitForTimeout(350);
+ok((await sw()) > 150 && await page.evaluate(() => document.activeElement.id === 'search'), 'pressing the magnifier expands it into a focused search field');
+await page.fill('#search', 'octo'); ok((await page.textContent('#list')).includes('Work / Deep'), 'search finds entry with folder path');
+await page.evaluate(() => document.getElementById('search').blur()); await page.waitForTimeout(350);
+ok((await sw()) > 150, 'a search with text stays open when it loses focus');
+await page.focus('#search'); await page.keyboard.press('Escape'); await page.waitForTimeout(350);
+ok((await sw()) === 0 && (await page.inputValue('#search')) === '' && (await page.locator('tbody tr').count()) >= 0, 'Escape clears the search and shrinks it back to the magnifier');
 await page.click('#btnSave');
 await page.click('#btnLock'); await page.waitForSelector('#lock:not([hidden])'); await shot('lock');
 const lockText = await page.textContent('#lock'); const recentText = await page.textContent('#recent');
@@ -120,7 +128,7 @@ await shot('unlocked');
 ok((await page.textContent('#tree')).includes('Deep'), 'data persisted across lock/unlock');
 ok(errs.length === 0, 'no renderer errors ' + errs.join('|'));
 // auto-lock with an open dialog and unsaved edits: must save, lock, and leave no dialog/password on screen
-await page.evaluate(async () => { await kyuch.call('group:add', { parentId: S.root.id, name: 'Dirty' }); });
+await page.evaluate(async () => { await kyuch.call('group:add', { parentId: S.dbs[0].root.id, name: 'Dirty' }); });
 const wLock = await addEntryWin(); await wLock.fill('#eTitle', 'Unsaved'); await wLock.fill('#ePass', 'plaintext-pw');
 await page.evaluate(() => lock(true));
 await page.waitForSelector('#lock:not([hidden])'); await page.waitForTimeout(500);
@@ -161,7 +169,7 @@ ok(wG.isClosed(), 'Close closes the generator window');
 const wG2 = await genWin(); await closeWin(wG2, '#edX');
 const wG3 = await genWin(); const g3 = wG3.waitForEvent('close'); await wG3.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))).catch(() => {}); await g3;
 ok(wG2.isClosed() && wG3.isClosed(), 'the generator window also closes with its X button and Escape');
-const wGen = await addEntryWin(); await wGen.click('#eGen'); const gp2 = await wGen.inputValue('#gOut'); await wGen.click('#gUse');
+const wGen = await addEntryWin(); await wGen.click('#eGen'); const gp2 = await wGen.inputValue('#gOut'); await wGen.click('#gUse'); await wGen.waitForFunction(() => document.getElementById('ePass').value !== '', null, { timeout: 5000 }).catch(() => {}); // the page fills the field a moment after the dialog closes
 ok((await wGen.inputValue('#ePass')) === gp2 && gp2.length === 32, 'Use password fills the entry form');
 ok((await wGen.inputValue('#gOut')) === '', 'generator output wiped after closing');
 await wGen.click('#eGen'); await wGen.check('#gMulti'); await wGen.fill('#gCount', '3');
@@ -189,6 +197,11 @@ const wS = await settingsWin();
 ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('settings.html')).isModal())) && await page.evaluate(() => !document.getElementById('settingsDlg')), 'Settings opens in its own modal window, not inside the main window');
 const cardIds = await wS.evaluate(() => [...document.querySelectorAll('#aThemes .theme-card')].map((c) => c.dataset.theme));
 ok(JSON.stringify(cardIds) === JSON.stringify(['system', 'dark', 'light', 'ocean', 'forest', 'amethyst', 'sand', 'blossom']), 'Settings offers 8 themes: ' + cardIds.join(', '));
+const tabs = await wS.evaluate(() => [...document.querySelectorAll('[data-tab]')].map((b) => b.textContent));
+ok(JSON.stringify(tabs) === JSON.stringify(['General', 'Appearance', 'Auto-type', 'Security', 'Accessibility']), 'Settings is split into tabs, with an Accessibility tab: ' + tabs.join(', '));
+ok(await wS.isVisible('#aLock') && !(await wS.isVisible('#aThemes')) && !(await wS.isVisible('#aButtons')), 'only the General tab is showing at first');
+await wS.click('#tabAppearance');
+ok(await wS.isVisible('#aThemes') && !(await wS.isVisible('#aLock')), 'the Appearance tab swaps in the theme picker');
 const sBg = () => wS.evaluate(() => getComputedStyle(document.body).backgroundColor);
 const primaryBg = () => wS.evaluate(() => getComputedStyle(document.getElementById('edSave')).backgroundColor);
 ok((await primaryBg()) === 'rgb(248, 88, 0)', 'Dark theme: primary buttons are the brand orange');
@@ -202,7 +215,7 @@ ok((await bodyBg()) === 'rgb(27, 29, 34)', 'the main window keeps its theme unti
 await cancelWin(wS);
 ok((await bodyBg()) === 'rgb(27, 29, 34)', 'Cancel leaves the saved theme');
 const wS2 = await settingsWin();
-await wS2.click('#aThemes [data-theme="blossom"]'); await saveWin(wS2);
+await wS2.click('#tabAppearance'); await wS2.click('#aThemes [data-theme="blossom"]'); await saveWin(wS2);
 ok((await bodyBg()) === 'rgb(251, 241, 245)' && (await page.evaluate(() => kyuch.call('cfg:get'))).theme === 'blossom', 'Apply saves the chosen theme and the main window follows (Blossom)');
 const expectBg = { ocean: 'rgb(11, 26, 38)', forest: 'rgb(14, 26, 20)', amethyst: 'rgb(23, 18, 31)', sand: 'rgb(245, 239, 227)', blossom: 'rgb(251, 241, 245)' };
 for (const [name, bg] of Object.entries(expectBg)) { await setTheme(name); if ((await bodyBg()) !== bg) throw new Error('FAIL: theme ' + name + ' background ' + (await bodyBg())); await shot('theme-' + name); }
@@ -217,7 +230,7 @@ const wA = await settingsWin();
 ok((await wA.textContent('body')).includes('Alt+Tab delay (milliseconds') && (await wA.inputValue('#aDelay')) === '500', 'Settings shows the Alt+Tab delay in milliseconds, default 500');
 ok(!(await wA.isChecked('#aAutoUpd')), 'Settings has the daily update check switch (off in this run)');
 ok(await wA.isChecked('#aConfirmRm'), 'Settings has "Ask before removing a database from the list" (on by default)');
-await wA.check('#aAutoUpd'); await wA.fill('#aDelay', '250'); await saveWin(wA);
+await wA.click('#tabAutotype'); await wA.fill('#aDelay', '250'); await wA.click('#tabGeneral'); await wA.check('#aAutoUpd'); await saveWin(wA);
 ok((await page.evaluate(() => kyuch.call('cfg:get'))).altTabDelayMs === 250, 'new Alt+Tab delay is saved (250 ms)');
 ok((await page.evaluate(() => kyuch.call('cfg:get'))).autoUpdateCheck === true, 'daily update check switch is saved');
 await page.evaluate(() => kyuch.call('cfg:set', { autoUpdateCheck: false }));
@@ -255,7 +268,7 @@ await page.waitForFunction(() => /^\d{3} \d{3}$/.test((document.querySelector('#
 const dShown = (await page.textContent('#detail .otpcode')).replace(' ', '');
 ok((await page.textContent('#detail')).includes('One-time password') && near('JBSWY3DPEHPK3PXP').includes(dShown), 'detail pane shows the live code: ' + dShown);
 await page.click('#detail .field:has-text("One-time password") button'); await page.waitForTimeout(200);
-ok((await app.evaluate(({ clipboard }) => clipboard.readText())) === (await page.textContent('#detail .otpcode')).replace(' ', ''), 'Copy puts the current code (not the secret) on the clipboard');
+ok(near('JBSWY3DPEHPK3PXP').includes(await app.evaluate(({ clipboard }) => clipboard.readText())), 'Copy puts the current code (not the secret) on the clipboard'); // tolerant of a 30 s window rollover
 const wEd = await editEntryWin(); await wEd.click('#tabBtnOtp');
 await wEd.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('oCode').textContent));
 ok((await wEd.inputValue('#oSecret')).startsWith('otpauth://totp/') && (await wEd.inputValue('#oSecret')).includes('JBSWY3DPEHPK3PXP'), 'editing shows the stored otpauth:// link');
@@ -271,7 +284,7 @@ ok(await page.evaluate(() => entries.get(selEntry).e.title === 'OTP Site' && doc
 await page.focus('.node:has-text("Work")'); await page.keyboard.press('ArrowDown');
 ok(await page.evaluate(() => groups.get(selGroup).g.name === 'Deep' && document.activeElement.matches('.node.sel')), 'folder tree: ArrowDown selects the next folder and keeps the focus');
 // recycle bin: first delete moves it there, deleting it from the bin is really permanent
-await page.evaluate(async () => { setState(await kyuch.call('entry:add', { groupId: S.root.id, title: 'ToBin' })); });
+await page.evaluate(async () => { setState(await kyuch.call('entry:add', { groupId: S.dbs[0].root.id, title: 'ToBin' })); });
 await page.click('.node:has-text("e2e")'); await page.click('tbody tr:has-text("ToBin")'); await page.click('#detail button:has-text("Delete")'); await page.waitForTimeout(300);
 await page.click('.node:has-text("Recycle Bin")');
 ok(await page.isVisible('tbody tr:has-text("ToBin")'), 'a deleted entry lands in the Recycle Bin');
@@ -280,13 +293,14 @@ const cf = await confirms();
 ok((await page.locator('tbody tr:has-text("ToBin")').count()) === 0 && /Recycle Bin/.test(cf.at(-2)) && /Permanently delete/.test(cf.at(-1)), 'deleting from the bin is permanent, and the prompt says so: ' + cf.at(-1));
 // master password change needs the new password twice
 const wP = await settingsWin();
-ok(await wP.isVisible('#aLayout') && (await wP.inputValue('#aLayout')) === 'auto' && await wP.isVisible('#aPwBox'), 'Settings has a keyboard layout choice for auto-type (Linux) and the master password fields');
+await wP.click('#tabAutotype'); const hasLayout = await wP.isVisible('#aLayout') && (await wP.inputValue('#aLayout')) === 'auto'; await wP.click('#tabSecurity');
+ok(hasLayout && await wP.isVisible('#aPwBox') && await wP.isVisible('#aPwDb'), 'Settings has a keyboard layout choice for auto-type (Linux) and the master password fields');
 await wP.fill('#aNewPw', 'abc'); await wP.fill('#aNewPw2', 'abd'); await wP.click('#edSave'); await wP.waitForTimeout(250);
 ok(!wP.isClosed() && (await wP.textContent('#aErr')).includes('do not match'), 'a mistyped new master password is refused before anything is saved');
 await wP.fill('#aNewPw', ''); await wP.fill('#aNewPw2', ''); await cancelWin(wP);
 // a stored OTP link the user did not touch is saved exactly as it was (extra parameters survive)
 const keepUri = 'otpauth://totp/X?secret=JBSWY3DPEHPK3PXP&extra=keepme&digits=7';
-const keepId = await page.evaluate(async (u) => { setState(await kyuch.call('entry:add', { groupId: S.root.id, title: 'KeepOtp', otp: u })); return [...entries.values()].find((x) => x.e.title === 'KeepOtp').e.id; }, keepUri);
+const keepId = await page.evaluate(async (u) => { setState(await kyuch.call('entry:add', { groupId: S.dbs[0].root.id, title: 'KeepOtp', otp: u })); return [...entries.values()].find((x) => x.e.title === 'KeepOtp').e.id; }, keepUri);
 await page.click('.node:has-text("e2e")'); await page.click('tbody tr:has-text("KeepOtp")'); const wKeep = await editEntryWin();
 await wKeep.fill('#eNotes', 'edited without touching the OTP tab'); await saveWin(wKeep);
 const afterEdit = await page.evaluate((id) => kyuch.call('entry:get', { id }), keepId);
@@ -358,7 +372,7 @@ ok((await page.textContent('#updStatus')).includes('Signature check FAILED'), 't
 await page.click('#aboutForm button[value=cancel]');
 await page.click('tbody tr:has-text("Iconic")');
 // ---- right-click menu on an entry ----
-await page.evaluate(async () => { setState(await kyuch.call('entry:add', { groupId: S.root.id, title: 'Linky', username: 'lin', password: 'linpw', url: 'example.org', icon: 85 })); });
+await page.evaluate(async () => { setState(await kyuch.call('entry:add', { groupId: S.dbs[0].root.id, title: 'Linky', username: 'lin', password: 'linpw', url: 'example.org', icon: 85 })); });
 await page.click('.node:has-text("e2e")');
 ok(await page.evaluate(() => { const k = [...document.querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Linky')).querySelector('.kic'); return !!k && getComputedStyle(k).backgroundPosition !== '0% 0%'; }), 'list rows draw the new sprite icons');
 await app.evaluate(({ shell }) => { globalThis.__opened = []; shell.openExternal = async (u) => { globalThis.__opened.push(u); }; }); // never open a real browser from a test
@@ -395,6 +409,95 @@ ok((await wCtx.inputValue('#eTitle')) === 'Linky', 'Edit entry from the menu ope
 await page.click('tbody tr:has-text("Linky")', { button: 'right' }); await page.click('#ctxMenu button:has-text("Delete")'); await page.waitForTimeout(300);
 ok((await page.locator('tbody tr:has-text("Linky")').count()) === 0 && /Recycle Bin/.test((await confirms()).at(-1)), 'Delete from the menu asks, then moves the entry to the Recycle Bin');
 await page.click('.node:has-text("e2e")');
+// ---- notes under the buttons, icons vs letters, several databases at once, copying entries between them ----
+await page.evaluate(async () => { setState(await kyuch.call('entry:add', { groupId: S.dbs[0].root.id, title: 'CopyA', username: 'ua', password: 'pa-secret', notes: 'note text', tags: ['t1'], otp: 'otpauth://totp/X?secret=JBSWY3DPEHPK3PXP', icon: 90 })); });
+await page.evaluate(async () => { setState(await kyuch.call('entry:add', { groupId: S.dbs[0].root.id, title: 'CopyB', username: 'ub', password: 'pb-secret' })); });
+await page.click('.node.dbroot'); await page.click('tbody tr:has-text("CopyA")');
+ok(await page.evaluate(() => { const a = document.querySelector('#detail .actions'), n = document.querySelector('#detail .notesbox'); return !!n && !!(a.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING); }), 'the comments are shown below the Auto-type / Edit / Delete buttons');
+const looks = (sel) => page.evaluate((q) => { const b = document.querySelector(q), i = b.querySelector('svg.bi'), l = b.querySelector('.bl'); return { icon: !!i && getComputedStyle(i).display !== 'none', label: !!l && getComputedStyle(l).display !== 'none', name: b.getAttribute('aria-label') || b.title }; }, sel);
+const checkIcons = async (wantIcon) => {
+  for (const sel of ['#btnAdd', '#btnSave', '#btnLock', '#btnGen', '#themeBtn']) { const l = await looks(sel); if (!l.name || l.icon !== wantIcon || l.label === wantIcon) throw new Error('FAIL: ' + sel + ' ' + JSON.stringify(l)); }
+  const inDetail = await page.evaluate(() => [...document.querySelectorAll('#detail button, #list .bar button')].map((b) => [b.getAttribute('aria-label'), getComputedStyle(b.querySelector('svg.bi') || b).display, b.querySelector('svg.bi') ? 'svg' : 'none']));
+  return inDetail;
+};
+const inIcons = await checkIcons(true);
+ok(inIcons.length >= 8 && inIcons.every(([n, , k]) => n && k === 'svg'), 'every button has an icon (add, save, lock, generator, theme, folder settings, delete folder, copy, show, auto-type, edit, delete): ' + inIcons.map((x) => x[0]).join(', '));
+const sp = await looks('#btnSearch'); ok(sp.icon && !sp.label, 'the search button is always a magnifier');
+await page.click('#detail .field:has-text("Password") button >> nth=0');
+ok(await page.evaluate(() => [...document.querySelectorAll('#detail .field')].find((f) => f.textContent.startsWith('Password')).querySelector('button').getAttribute('aria-label')) === 'Hide', 'Show turns into Hide (eye-off icon) when the password is shown'); await page.click('#detail .field:has-text("Password") button >> nth=0');
+await shot('icons-mode');
+await page.evaluate(() => kyuch.call('cfg:set', { theme: 'dark' })); await page.waitForTimeout(250);
+const tc = await page.evaluate(() => getComputedStyle(document.getElementById('btnSave')).color);
+ok(/^rgb\((2[0-9]{2}|1[89][0-9])/.test(tc), 'the icons take the text colour, which is near white on the dark themes: ' + tc);
+await page.evaluate(() => kyuch.call('cfg:set', { theme: 'system' })); await page.waitForTimeout(150);
+const wAcc = await settingsWin(); await wAcc.click('#tabAccess');
+ok(await wAcc.isVisible('#aButtons') && (await wAcc.inputValue('#aButtons')) === 'icons', 'Settings > Accessibility offers icons or letters for the buttons (icons by default)');
+await wAcc.selectOption('#aButtons', 'text'); await saveWin(wAcc); await page.waitForTimeout(200);
+await checkIcons(false).catch((e) => { throw e; });
+ok((await page.evaluate(() => document.body.dataset.buttons)) === 'text' && (await looks('#btnSave')).label && !(await looks('#btnSave')).icon, 'switching to letters shows the text labels instead of icons');
+ok((await looks('#btnSearch')).icon, 'the search stays a magnifier in letters mode');
+await shot('letters-mode');
+await page.evaluate(() => kyuch.call('cfg:set', { buttonStyle: 'icons' })); await page.waitForTimeout(200);
+ok((await looks('#btnSave')).icon, 'and back to icons');
+// a second database, stacked under its own folder in the tree
+fs.rmSync(T + '/second.kdbx', { force: true });
+await app.evaluate(({ dialog }, f) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: f }); }, T + '/second.kdbx');
+await viaLogoMenu('#mNew')(); await page.waitForSelector('#newDbDlg[open]');
+await page.fill('#nPw', 'pw2'); await page.fill('#nPw2', 'pw2'); await page.click('#newDbForm button.primary');
+await page.waitForFunction(() => document.querySelectorAll('.node.dbroot').length === 2);
+const roots = await page.evaluate(() => [...document.querySelectorAll('.node.dbroot')].map((n) => n.textContent.replace(/^\s*[▾▸]?\s*/, '').trim().replace(/ •$/, '')));
+ok(JSON.stringify(roots) === JSON.stringify(['e2e', 'second']) && !(await page.isVisible('#lock')), 'a second database is added to the view without closing the first, stacked in the folder tree: ' + roots.join(' | '));
+await shot('two-dbs');
+// copy two entries from the first database into the second
+await page.click('.node.dbroot >> nth=0'); await page.click('tbody tr:has-text("CopyA")'); await page.click('tbody tr:has-text("CopyB")', { modifiers: ['Control'] });
+ok((await page.textContent('#detail')).includes('2 entries selected') && (await page.locator('tbody tr.sel').count()) === 2, 'Ctrl-click selects several entries');
+await page.click('tbody tr:has-text("CopyB")', { button: 'right' });
+ok((await page.textContent('#ctxMenu')).includes('2 entries selected') && !(await page.textContent('#ctxMenu')).includes('Copy username'), 'right-clicking a selection offers actions for all of them');
+await page.hover('#ctxMenu .subwrap:has-text("Copy to")');
+const dests = await page.evaluate(() => [...document.querySelectorAll('#ctxMenu .subwrap')].find((w) => w.textContent.startsWith('Copy to')).querySelectorAll('.sub button').values().map((b) => b.textContent.trim()).toArray());
+ok(dests.includes('e2e') && dests.includes('second') && !dests.includes('Recycle Bin'), '"Copy to" lists the folders of every open database: ' + dests.join(', '));
+await shot('copyto');
+await page.click('#ctxMenu .sub button:has-text("second")'); await page.waitForTimeout(400);
+await page.click('.node.dbroot >> nth=1');
+const rowsTxt = await page.textContent('#list');
+ok(rowsTxt.includes('CopyA') && rowsTxt.includes('CopyB'), 'both entries now appear in the second database');
+await page.click('.node.dbroot >> nth=0');
+ok((await page.textContent('#list')).includes('CopyA'), 'and the originals are still in the first (copy, not move)');
+const pair = await page.evaluate(async () => {
+  const ids = (t) => [...entries.values()].filter((x) => x.e.title === t).map((x) => ({ id: x.e.id, db: x.db }));
+  const [a1, a2] = ids('CopyA'); const g1 = await kyuch.call('entry:get', { id: a1.id }), g2 = await kyuch.call('entry:get', { id: a2.id });
+  return { n: ids('CopyA').length, same: ['username', 'password', 'notes', 'otp', 'icon'].every((k) => g1[k] === g2[k]) && JSON.stringify(g1.tags) === JSON.stringify(g2.tags), diffId: a1.id !== a2.id, diffDb: a1.db !== a2.db, pw: g2.password };
+});
+ok(pair.n === 2 && pair.same && pair.diffId && pair.diffDb && pair.pw === 'pa-secret', 'the copy keeps username, password, notes, tags, icon and one-time password, under a new id: ' + JSON.stringify(pair));
+ok(await page.evaluate(() => document.getElementById('btnSave').hasAttribute('data-dirty')), 'the Save button shows unsaved changes');
+const moveAcross = await page.evaluate(() => { const a = [...entries.values()].find((x) => x.e.title === 'CopyA'); const other = [...groups.values()].find((x) => x.db !== a.db); return kyuch.call('move', { id: a.e.id, toId: other.g.id }).then(() => 'moved', (e) => e.message); });
+ok(/Copy/.test(moveAcross), 'moving between databases is refused (copy is the way): ' + moveAcross);
+const dropped = await page.evaluate(async () => { const b = [...entries.values()].find((x) => x.e.title === 'CopyB' && x.db === S.dbs[0].path); const to = S.dbs[1].root.id; await drop([b.e.id], to); return [...entries.values()].filter((x) => x.e.title === 'CopyB').length; });
+ok(dropped === 3, 'dropping an entry onto a folder of another database copies it');
+await page.click('#btnSave'); await page.waitForTimeout(500);
+ok(await page.evaluate(() => S.dbs.every((d) => !d.dirty) && !document.getElementById('btnSave').hasAttribute('data-dirty')), 'Save writes every database with changes');
+ok(fs.statSync(T + '/second.kdbx').size > 0, 'the second database file exists on disk');
+// opening an already open database is refused; closing one leaves the other
+const dup = await page.evaluate((p) => kyuch.call('db:open', { path: p, password: 'pw2' }).then(() => 'opened', (e) => e.message), T + '/second.kdbx');
+ok(dup === 'That database is already open', 'the same database cannot be opened twice: ' + dup);
+await page.click('.node.dbroot >> nth=1'); await viaLogoMenu('#mClose')(); await page.waitForFunction(() => document.querySelectorAll('.node.dbroot').length === 1);
+ok(!(await page.isVisible('#lock')) && (await page.evaluate(() => kyuch.call('cfg:get'))).recent.every((r) => !r.endsWith('second.kdbx')), 'Close database closes just the selected one and takes it off the list, the first stays open');
+// add it back with Open database…, with a wrong password first
+await app.evaluate(({ dialog }, f) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] }); }, T + '/second.kdbx');
+await viaLogoMenu('#mOpen')(); await page.waitForSelector('#pwDlg[open]');
+await page.fill('#pwIn', 'nope'); await page.click('#pwForm button.primary'); await page.waitForTimeout(500);
+ok(await page.evaluate(() => document.getElementById('pwDlg').open) && (await page.textContent('#pwErr')) === 'Wrong master password', 'Open database asks for the password in a dialog; a wrong one is reported there and the dialog stays');
+await page.fill('#pwIn', 'pw2'); await page.click('#pwForm button.primary');
+await page.waitForFunction(() => document.querySelectorAll('.node.dbroot').length === 2);
+ok((await page.locator('.node.dbroot').count()) === 2, 'Open database adds another database to the view');
+await page.click('.node.dbroot >> nth=1'); await page.click('#list tbody tr:has-text("CopyA")');
+ok((await page.textContent('#status')).includes('second.kdbx'), 'the status bar shows the selected database');
+// lock locks all of them
+await page.click('#btnLock'); await page.waitForSelector('#lock:not([hidden])');
+ok((await page.locator('#recent .recentrow').count()) >= 1, 'Lock closes every open database');
+await page.click('#recent .recentrow:has-text("e2e") .grow'); await page.fill('#unlockPw', 'hunter2'); await page.press('#unlockPw', 'Enter'); await page.waitForSelector('#app:not([hidden])');
+await page.click('.node.dbroot');
+
 // ---- window buttons, logo menu, Settings/About on the database screen ----
 await page.hover('#wMin');
 const circ = await page.evaluate(() => { const b = document.getElementById('wMin'), cs = getComputedStyle(b); return { bg: cs.backgroundColor, radius: cs.borderRadius, w: Math.round(b.getBoundingClientRect().width) }; });
@@ -415,7 +518,7 @@ await page.keyboard.press('Escape');
 const mk = await logoInfo('#lock .logomark');
 ok(mk.mask.includes('logo-mark.png') && Math.abs(mk.w / mk.h - 640 / 557) < 0.02 && await pngLoads('icons.png'), 'the new key logo is drawn with the right proportions: ' + JSON.stringify(mk));
 const wL = await settingsWin();
-ok((await wL.locator('#aThemes .theme-card').count()) === 8 && !(await wL.isVisible('#aPwBox')) && (await wL.locator('#aBrowser option').first().textContent()) === 'System default', 'Settings opens without a database: themes, browser choice, no master-password fields');
+ok((await wL.locator('#aThemes .theme-card').count()) === 8 && !(await wL.isVisible('#tabSecurity')) && (await wL.locator('#aBrowser option').first().textContent()) === 'System default', 'Settings opens without a database: themes, browser choice, no master-password fields');
 ok(await wL.isChecked('#aTray') && await wL.isChecked('#aTrayLock'), 'closing to the tray (and locking when it goes there) is on by default');
 await cancelWin(wL);
 await viaLogoMenu('#mAbout')(); await page.waitForSelector('#aboutDlg[open]'); await page.click('#aboutForm button[value=cancel]');
@@ -472,7 +575,7 @@ await w5.check('#aConfirmRm'); await closeWinOn(w5, '#edSave', p5);
 ok((await p5.evaluate(() => kyuch.call('cfg:get'))).confirmRemoveDb === true, 'Settings turns the question back on');
 // Close database: asks about unsaved changes, then locks and removes the database from the list
 await a5.evaluate(({ dialog }) => { globalThis.__answer = 2; dialog.showMessageBox = async () => ({ response: globalThis.__answer }); });
-await p5.evaluate(async () => { setState(await kyuch.call('group:add', { parentId: S.root.id, name: 'Unsaved' })); });
+await p5.evaluate(async () => { setState(await kyuch.call('group:add', { parentId: S.dbs[0].root.id, name: 'Unsaved' })); });
 await viaLogoMenu('#mClose', p5)(); await p5.waitForTimeout(400);
 ok(!(await p5.isVisible('#lock')) && (await p5.evaluate(() => kyuch.call('cfg:get'))).recent.length === 1, 'Close database with unsaved changes asks first; Cancel keeps the database open and in the list');
 await a5.evaluate(() => { globalThis.__answer = 1; });
